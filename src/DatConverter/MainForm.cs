@@ -183,6 +183,8 @@ public sealed class MainForm : Form
         convertButton.Visible = false;
         cancelButton.Enabled = false;
         openOutputFolderButton.Enabled = false;
+        copyLogButton.Visible = false;
+        clearLogButton.Visible = false;
         startQueueButton.Enabled = false;
         stopAfterCurrentButton.Enabled = false;
         removeSelectedQueueItemButton.Enabled = false;
@@ -2073,6 +2075,8 @@ public sealed class MainForm : Form
 
         areDetailsVisible = visible;
         showDetailsButton.Text = visible ? "Hide Details" : "Show Details";
+        copyLogButton.Visible = visible;
+        clearLogButton.Visible = visible;
 
         if (detailsPanel is not null)
         {
@@ -2701,8 +2705,8 @@ public sealed class MainForm : Form
         }
 
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        panel.Controls.Add(new Panel { Dock = DockStyle.Fill }, 0, 0);
-        panel.Controls.Add(new Panel { Dock = DockStyle.Fill }, 1, 0);
+        AddActionButtonToGrid(panel, copyLogButton, 0);
+        AddActionButtonToGrid(panel, clearLogButton, 1);
         panel.Controls.Add(new Panel { Dock = DockStyle.Fill }, 2, 0);
         AddActionButtonToGrid(panel, showDetailsButton, 3);
         AddActionButtonToGrid(panel, openOutputFolderButton, 4);
@@ -2740,54 +2744,19 @@ public sealed class MainForm : Form
         panel.Controls.Add(button, column, 0);
     }
 
-    private Control BuildLogToolbarPanel()
-    {
-        var panel = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 5,
-            RowCount = 1,
-            Padding = new Padding(0),
-            Margin = new Padding(0)
-        };
-
-        for (var column = 0; column < 5; column++)
-        {
-            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
-        }
-
-        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        panel.Controls.Add(new Panel { Dock = DockStyle.Fill }, 0, 0);
-        panel.Controls.Add(new Panel { Dock = DockStyle.Fill }, 1, 0);
-        panel.Controls.Add(new Panel { Dock = DockStyle.Fill }, 2, 0);
-        AddDetailsToolbarButtonToGrid(panel, copyLogButton, 3);
-        AddDetailsToolbarButtonToGrid(panel, clearLogButton, 4);
-
-        return panel;
-    }
-
-    private static void AddDetailsToolbarButtonToGrid(TableLayoutPanel panel, Button button, int column)
-    {
-        button.Dock = DockStyle.Fill;
-        button.Margin = new Padding(6, 0, 0, 8);
-        panel.Controls.Add(button, column, 0);
-    }
-
     private Control BuildDetailsPanel()
     {
         var panel = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 2,
+            RowCount = 1,
             Margin = new Padding(0)
         };
         panel.SuspendLayout();
-        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        panel.Controls.Add(BuildLogToolbarPanel(), 0, 0);
-        panel.Controls.Add(statusLogTextBox, 0, 1);
+        panel.Controls.Add(statusLogTextBox, 0, 0);
         panel.ResumeLayout(false);
         return panel;
     }
