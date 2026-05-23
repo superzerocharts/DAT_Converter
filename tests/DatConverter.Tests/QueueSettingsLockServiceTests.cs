@@ -13,7 +13,6 @@ public sealed class QueueSettingsLockServiceTests
             OutputFormat.Mp4,
             "Remux",
             FpsOption.FromLabel("30"),
-            false,
             true)
         {
             Status = QueueItemStatus.Ready,
@@ -26,8 +25,7 @@ public sealed class QueueSettingsLockServiceTests
             "Encode",
             FpsOption.FromLabel("29.97"),
             OutputDestinationMode.ChooseOutputFolder,
-            @"C:\locked-output",
-            false);
+            @"C:\locked-output");
 
         QueueSettingsLockService.ApplyLockedSettings(
             item,
@@ -44,7 +42,6 @@ public sealed class QueueSettingsLockServiceTests
         Assert.Equal(OutputDestinationMode.ChooseOutputFolder, item.OutputDestinationMode);
         Assert.Equal(@"C:\locked-output", item.SelectedOutputFolder);
         Assert.Equal(@"C:\locked-output\clip.mkv", item.PlannedOutputPath);
-        Assert.False(item.SkipIfDirectOutputExists);
         Assert.False(item.HasExistingDirectOutput);
         Assert.Equal(QueueItemStatus.Ready, item.Status);
         Assert.Equal("Ready", item.StatusText);
@@ -62,15 +59,13 @@ public sealed class QueueSettingsLockServiceTests
             OutputFormat.Mkv,
             "Encode",
             FpsOption.FromLabel("24"),
-            false,
             false);
         var lockedSettings = new QueueSettingsSnapshot(
             OutputFormat.Mp4,
             "Remux",
             FpsOption.FromLabel("30"),
             OutputDestinationMode.SameFolderAsSource,
-            null,
-            true);
+            null);
 
         QueueSettingsLockService.ApplyLockedSettings(
             item,
@@ -85,7 +80,6 @@ public sealed class QueueSettingsLockServiceTests
         Assert.Equal(OutputFormat.Mp4, item.OutputFormat);
         Assert.Equal("Remux", item.ConversionMode);
         Assert.Equal("30", item.Fps.Label);
-        Assert.True(item.SkipIfDirectOutputExists);
         Assert.Equal(QueueItemStatus.Ready, item.Status);
     }
 
@@ -100,26 +94,23 @@ public sealed class QueueSettingsLockServiceTests
             OutputFormat.Mp4,
             "Remux",
             FpsOption.FromLabel("30"),
-            false,
             false);
         var lockedSettings = new QueueSettingsSnapshot(
             OutputFormat.Mp4,
             "Remux",
             FpsOption.FromLabel("30"),
             OutputDestinationMode.ChooseOutputFolder,
-            @"C:\locked-output",
-            true);
+            @"C:\locked-output");
 
         QueueSettingsLockService.ApplyLockedSettings(
             item,
             lockedSettings,
             @"C:\locked-output",
-            @"C:\locked-output\clip_converted.mp4",
+            @"C:\locked-output\clip.mp4",
             hasExistingDirectOutput: true,
             readyProgressText: "Ready");
 
         Assert.True(item.HasExistingDirectOutput);
-        Assert.True(item.SkipIfDirectOutputExists);
         Assert.Equal(QueueItemStatus.Skipped, item.Status);
         Assert.Equal("Exists", item.StatusText);
         Assert.Equal("Selected output exists", item.ProgressText);

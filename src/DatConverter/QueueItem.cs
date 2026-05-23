@@ -10,8 +10,7 @@ public sealed class QueueItem
         OutputFormat outputFormat,
         string conversionMode,
         FpsOption fps,
-        bool hasExistingDirectOutput,
-        bool skipIfDirectOutputExists)
+        bool hasExistingDirectOutput)
     {
         InputPath = inputPath;
         PlannedOutputPath = plannedOutputPath;
@@ -21,7 +20,6 @@ public sealed class QueueItem
         ConversionMode = conversionMode;
         Fps = fps;
         HasExistingDirectOutput = hasExistingDirectOutput;
-        SkipIfDirectOutputExists = skipIfDirectOutputExists;
         Status = QueueItemStatus.WaitingForProbe;
         StatusText = "Waiting for probe";
     }
@@ -42,7 +40,7 @@ public sealed class QueueItem
 
     public bool HasExistingDirectOutput { get; set; }
 
-    public bool SkipIfDirectOutputExists { get; set; }
+    public string? CustomOutputPath { get; set; }
 
     public ProbeResult? PreProbeResult { get; set; }
 

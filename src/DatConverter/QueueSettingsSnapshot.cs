@@ -5,5 +5,4 @@ public sealed record QueueSettingsSnapshot(
     string ConversionMode,
     FpsOption Fps,
     OutputDestinationMode OutputDestinationMode,
-    string? ChosenOutputFolder,
-    bool SkipIfDirectOutputExists);
+    string? ChosenOutputFolder);

@@ -23,13 +23,29 @@ public static class FfmpegCommandBuilder
             "-r",
             fps.FfmpegValue,
             "-i",
-            inputPath,
-            "-c:v",
-            "copy"
+            inputPath
         };
 
         if (outputFormat.IsMp4())
         {
+            arguments.Add("-map");
+            arguments.Add("0:v:0");
+            arguments.Add("-an");
+            arguments.Add("-sn");
+            arguments.Add("-dn");
+        }
+
+        arguments.Add("-c:v");
+        arguments.Add("copy");
+
+        if (outputFormat.IsMp4())
+        {
+            arguments.Add("-tag:v");
+            arguments.Add("avc1");
+            arguments.Add("-avoid_negative_ts");
+            arguments.Add("make_zero");
+            arguments.Add("-video_track_timescale");
+            arguments.Add("90000");
             arguments.Add("-movflags");
             arguments.Add("+faststart");
         }

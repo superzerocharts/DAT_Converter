@@ -19,8 +19,8 @@ public sealed record ConversionResult(
     TimeSpan? Duration = null,
     bool UsedDeterminateProgress = false)
 {
-    public const string RemuxFailedMessage = "Remux failed. This file may have timing or bitstream issues. Try Encode mode, which is slower but more tolerant.";
-    public const string EncodeFailedMessage = "Encode failed. This .dat file may be unsupported or corrupt.";
+    public const string FastFailedMessage = "Fast mode failed. Try Full mode.";
+    public const string FullFailedMessage = "Full mode failed. This .dat file may be unsupported or corrupt.";
     public const string CanceledMessage = "Conversion canceled.";
 
     public string CommandLine => $"{QuoteForLog(FfmpegPath)} {string.Join(" ", Arguments.Select(QuoteForLog))}";

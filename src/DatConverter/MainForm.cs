@@ -6,10 +6,17 @@ public sealed class MainForm : Form
     private const int DefaultClientWidth = 960;
     private const int DefaultClientHeight = 852;
     private const int ActionRowHeight = 66;
+    private const int QueueStatusColumnWidth = 108;
+    private const int QueueFileColumnWidth = 202;
+    private const int QueueOutputColumnWidth = 278;
+    private const int QueueFormatColumnWidth = 70;
+    private const int QueueModeColumnWidth = 86;
+    private const int QueueFpsColumnWidth = 70;
+    private const int QueueProgressColumnWidth = 109;
 
-    private const string MissingToolsStatusMessage = "Required FFmpeg tools were not found.";
+    private const string MissingToolsStatusMessage = "The app needs its tools folder in the same folder as DatConverter.exe.";
     private const string MissingToolsExplanationMessage =
-        "Usually this means DAT Converter was opened without its bundled tools folder. Run the app from within the original DAT Converter folder.";
+        "Keep the tools folder next to DatConverter.exe, then reopen the app.";
     private const string MissingToolsDetailsMessage =
         MissingToolsStatusMessage + "\r\n" +
         MissingToolsExplanationMessage;
@@ -19,7 +26,6 @@ public sealed class MainForm : Form
     private readonly TextBox selectedFilePathTextBox;
     private readonly Button browseFileButton;
     private readonly Button addFolderButton;
-    private readonly CheckBox skipExistingOutputCheckBox;
     private readonly DataGridView queueGridView;
     private readonly Button startQueueButton;
     private readonly Button stopAfterCurrentButton;
@@ -71,6 +77,8 @@ public sealed class MainForm : Form
     private readonly Font normalStatusFont;
     private readonly Font boldStatusFont;
     private bool isInitializing;
+    private bool queueColumnsUserResized;
+    private bool isApplyingQueueColumnWidths;
 
     public MainForm()
     {
@@ -105,16 +113,6 @@ public sealed class MainForm : Form
         browseFileButton.Size = new Size(148, 42);
         addFolderButton = CreateButton("Add Folder...");
         addFolderButton.Size = new Size(166, 42);
-        skipExistingOutputCheckBox = new CheckBox
-        {
-            AutoSize = false,
-            Dock = DockStyle.Fill,
-            Checked = true,
-            Text = "Skip files that already have selected output format",
-            TextAlign = ContentAlignment.MiddleLeft,
-            Margin = new Padding(0, 4, 0, 4),
-            Padding = new Padding(2, 0, 0, 0)
-        };
         queueGridView = CreateQueueGridView();
         startQueueButton = CreateButton("Start Queue");
         startQueueButton.Size = new Size(160, 42);
@@ -141,7 +139,7 @@ public sealed class MainForm : Form
         outputFolderTextBox = CreateReadOnlyTextBox(string.IsNullOrWhiteSpace(selectionState.ChosenOutputFolderPath) ? "No output folder selected" : selectionState.ChosenOutputFolderPath);
         browseOutputFolderButton = CreateButton("Browse...");
         outputFormatComboBox = CreateComboBox(new[] { "MP4", "MKV" }, appSettings.OutputFormat);
-        conversionModeComboBox = CreateComboBox(new[] { "Remux", "Encode" }, appSettings.ConversionMode);
+        conversionModeComboBox = CreateComboBox(new[] { "Fast", "Full" }, FormatConversionModeForDisplay(appSettings.ConversionMode));
         frameRateComboBox = CreateComboBox(new[] { "15", "20", "24", "25", "29.97", "30" }, appSettings.Fps);
         convertButton = CreateButton("Convert");
         cancelButton = CreateButton("Cancel Current");
@@ -175,8 +173,12 @@ public sealed class MainForm : Form
             BorderStyle = BorderStyle.Fixed3D,
             DetectUrls = false
         };
-        openOutputFolderButton = CreateButton("Open Output Folder");
+        openOutputFolderButton = CreateButton("Open Output");
         openOutputFolderButton.Size = new Size(250, 42);
+        openOutputFolderButton.TextAlign = ContentAlignment.MiddleCenter;
+        openOutputFolderButton.ImageAlign = ContentAlignment.MiddleCenter;
+        openOutputFolderButton.TextImageRelation = TextImageRelation.Overlay;
+        openOutputFolderButton.Padding = Padding.Empty;
         copyLogButton = CreateButton("Copy Log");
         clearLogButton = CreateButton("Clear Log");
 
@@ -195,6 +197,9 @@ public sealed class MainForm : Form
         addFolderButton.Enabled = ffmpegTools.AreAvailable;
         addFolderButton.Click += AddFolderButton_Click;
         queueGridView.SelectionChanged += QueueGridView_SelectionChanged;
+        queueGridView.CellDoubleClick += QueueGridView_CellDoubleClick;
+        queueGridView.ColumnWidthChanged += QueueGridView_ColumnWidthChanged;
+        queueGridView.Resize += QueueGridView_Resize;
         startQueueButton.Click += StartQueueButton_Click;
         stopAfterCurrentButton.Click += StopAfterCurrentButton_Click;
         removeSelectedQueueItemButton.Click += RemoveSelectedQueueItemButton_Click;
@@ -205,7 +210,6 @@ public sealed class MainForm : Form
         outputFormatComboBox.SelectedIndexChanged += OutputFormatComboBox_SelectedIndexChanged;
         conversionModeComboBox.SelectedIndexChanged += ConversionModeComboBox_SelectedIndexChanged;
         frameRateComboBox.SelectedIndexChanged += FrameRateComboBox_SelectedIndexChanged;
-        skipExistingOutputCheckBox.CheckedChanged += SkipExistingOutputCheckBox_CheckedChanged;
         convertButton.Click += ConvertButton_Click;
         cancelButton.Click += CancelButton_Click;
         openOutputFolderButton.Click += OpenOutputFolderButton_Click;
@@ -220,6 +224,7 @@ public sealed class MainForm : Form
         technicalLog.Append($"Output destination mode: {FormatOutputDestinationMode(selectionState.OutputDestinationMode)}.");
         isInitializing = false;
         ApplyOutputDestinationMode();
+        ApplyQueueAutoFitColumnWidths();
         ApplyStartupToolValidation();
     }
 
@@ -236,7 +241,7 @@ public sealed class MainForm : Form
     private void ApplyStartupToolValidation()
     {
         RefreshStatusLog(ffmpegTools.AreAvailable
-            ? "Ready. Bundled FFmpeg tools were found."
+            ? "Ready."
             : MissingToolsStatusMessage);
 
         if (!ffmpegTools.AreAvailable)
@@ -589,6 +594,242 @@ public sealed class MainForm : Form
         UpdateQueueButtonState();
     }
 
+    private void QueueGridView_ColumnWidthChanged(object? sender, DataGridViewColumnEventArgs e)
+    {
+        if (isApplyingQueueColumnWidths || isInitializing)
+        {
+            return;
+        }
+
+        queueColumnsUserResized = true;
+    }
+
+    private void QueueGridView_Resize(object? sender, EventArgs e)
+    {
+        ApplyQueueAutoFitColumnWidths();
+    }
+
+    private void QueueGridView_CellDoubleClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (e.RowIndex < 0 || e.RowIndex >= queueGridView.Rows.Count)
+        {
+            return;
+        }
+
+        if (queueGridView.Rows[e.RowIndex].Tag is not QueueItem item)
+        {
+            return;
+        }
+
+        if (!CanEditQueueItemSaveAs(item))
+        {
+            RefreshStatusLog("Only Ready or Exists queue items can be renamed.");
+            return;
+        }
+
+        ShowSaveAsEditor(item);
+    }
+
+    private static bool CanEditQueueItemSaveAs(QueueItem item)
+    {
+        return item.Status is QueueItemStatus.Ready or QueueItemStatus.Skipped;
+    }
+
+    private void ShowSaveAsEditor(QueueItem item)
+    {
+        using var dialog = new Form
+        {
+            Text = "Save As",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            ClientSize = new Size(820, 150),
+            Font = Font
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(16),
+            ColumnCount = 3,
+            RowCount = 2
+        };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 82));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 122));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+
+        var saveAsTextBox = new TextBox
+        {
+            Dock = DockStyle.Fill,
+            Text = item.PlannedOutputPath,
+            Margin = new Padding(0, 8, 8, 6)
+        };
+        var browseButton = CreateButton("Browse...");
+        browseButton.Margin = new Padding(0, 6, 0, 6);
+        var buttonPanel = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            Margin = new Padding(0)
+        };
+        var applyButton = CreateButton("Apply");
+        var cancelDialogButton = CreateButton("Cancel");
+        cancelDialogButton.DialogResult = DialogResult.Cancel;
+        var resetButton = CreateButton("Reset");
+
+        browseButton.Click += (_, _) =>
+        {
+            using var saveDialog = CreateSaveAsDialog(item, saveAsTextBox.Text);
+            if (saveDialog.ShowDialog(dialog) == DialogResult.OK)
+            {
+                saveAsTextBox.Text = saveDialog.FileName;
+            }
+        };
+
+        applyButton.Click += (_, _) =>
+        {
+            if (TryApplyCustomSaveAsPath(item, saveAsTextBox.Text, dialog))
+            {
+                dialog.DialogResult = DialogResult.OK;
+                dialog.Close();
+            }
+        };
+
+        resetButton.Click += (_, _) =>
+        {
+            if (TryResetQueueItemOutputPath(item, dialog))
+            {
+                dialog.DialogResult = DialogResult.OK;
+                dialog.Close();
+            }
+        };
+
+        buttonPanel.Controls.Add(applyButton);
+        buttonPanel.Controls.Add(cancelDialogButton);
+        buttonPanel.Controls.Add(resetButton);
+
+        root.Controls.Add(CreateLabel("Save As:"), 0, 0);
+        root.Controls.Add(saveAsTextBox, 1, 0);
+        root.Controls.Add(browseButton, 2, 0);
+        root.Controls.Add(buttonPanel, 0, 1);
+        root.SetColumnSpan(buttonPanel, 3);
+
+        dialog.Controls.Add(root);
+        dialog.AcceptButton = applyButton;
+        dialog.CancelButton = cancelDialogButton;
+        dialog.ShowDialog(this);
+    }
+
+    private SaveFileDialog CreateSaveAsDialog(QueueItem item, string currentOutputPath)
+    {
+        var extension = item.OutputFormat.Extension();
+        var extensionWithoutDot = extension.TrimStart('.');
+        var dialog = new SaveFileDialog
+        {
+            Title = "Save As",
+            AddExtension = true,
+            CheckPathExists = true,
+            DefaultExt = extensionWithoutDot,
+            Filter = $"{item.OutputFormat.DisplayName()} files (*{extension})|*{extension}|All files (*.*)|*.*",
+            OverwritePrompt = false
+        };
+
+        var currentFolder = Path.GetDirectoryName(currentOutputPath);
+        if (!string.IsNullOrWhiteSpace(currentFolder) && Directory.Exists(currentFolder))
+        {
+            dialog.InitialDirectory = currentFolder;
+        }
+
+        var currentFileName = Path.GetFileName(currentOutputPath);
+        if (!string.IsNullOrWhiteSpace(currentFileName))
+        {
+            dialog.FileName = currentFileName;
+        }
+
+        return dialog;
+    }
+
+    private bool TryApplyCustomSaveAsPath(QueueItem item, string outputPath, IWin32Window owner)
+    {
+        var validation = OutputPathService.ValidateCustomOutputPath(
+            item.InputPath,
+            outputPath,
+            item.OutputFormat,
+            requireAvailable: true);
+        if (!validation.IsValid || string.IsNullOrWhiteSpace(validation.OutputPath))
+        {
+            RefreshStatusLog(validation.Message);
+            MessageBox.Show(owner, validation.Message, "Save As", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+
+        if (!IsAvailableQueueOutputPath(validation.OutputPath, item))
+        {
+            const string message = "Save As path is already used by another queued item.";
+            RefreshStatusLog(message);
+            MessageBox.Show(owner, message, "Save As", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+
+        item.CustomOutputPath = validation.OutputPath;
+        item.PlannedOutputPath = validation.OutputPath;
+        item.HasExistingDirectOutput = false;
+        item.Status = QueueItemStatus.Ready;
+        item.StatusText = "Ready";
+        item.ProgressText = item.PreProbeResult is null ? "Ready" : FormatProbeProgressText(item.PreProbeResult);
+        technicalLog.Append($"Queue item Save As applied. Input: {item.InputPath}; Output: {item.PlannedOutputPath}");
+        RefreshQueueGrid();
+        RefreshStatusLog("Save As path updated for the selected queue item.");
+        UpdateQueueButtonState();
+        return true;
+    }
+
+    private bool TryResetQueueItemOutputPath(QueueItem item, IWin32Window owner)
+    {
+        var settings = CaptureCurrentQueueSettings();
+        var outputFolderPath = ResolveActiveQueueOutputFolder(item.InputPath, settings);
+        var outputFolderValidation = OutputFolderValidator.ValidateOutputFolder(outputFolderPath);
+        if (!outputFolderValidation.IsValid || string.IsNullOrWhiteSpace(outputFolderValidation.FolderPath))
+        {
+            RefreshStatusLog(outputFolderValidation.Message);
+            MessageBox.Show(owner, outputFolderValidation.Message, "Save As", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+
+        var directOutputPath = OutputPathService.GetDirectOutputPath(item.InputPath, outputFolderValidation.FolderPath, settings.OutputFormat);
+        var hasExistingDirectOutput = !string.IsNullOrWhiteSpace(directOutputPath) && File.Exists(directOutputPath);
+        var previousCustomOutputPath = item.CustomOutputPath;
+        item.CustomOutputPath = null;
+        var plannedOutputPath = PlanQueueOutputPath(item.InputPath, outputFolderValidation.FolderPath, settings.OutputFormat, item);
+        if (string.IsNullOrWhiteSpace(plannedOutputPath))
+        {
+            item.CustomOutputPath = previousCustomOutputPath;
+            const string message = "No safe automatic output path could be planned.";
+            RefreshStatusLog(message);
+            MessageBox.Show(owner, message, "Save As", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+
+        QueueSettingsLockService.ApplyLockedSettings(
+            item,
+            settings,
+            outputFolderValidation.FolderPath,
+            plannedOutputPath,
+            hasExistingDirectOutput,
+            item.PreProbeResult is null ? "Ready" : FormatProbeProgressText(item.PreProbeResult));
+
+        technicalLog.Append($"Queue item Save As reset. Input: {item.InputPath}; Output: {item.PlannedOutputPath}");
+        RefreshQueueGrid();
+        RefreshStatusLog("Save As path reset for the selected queue item.");
+        UpdateQueueButtonState();
+        return true;
+    }
+
     private async void StartQueueButton_Click(object? sender, EventArgs e)
     {
         await StartQueueAsync();
@@ -623,6 +864,7 @@ public sealed class MainForm : Form
             queueItems.Remove(item);
         }
 
+        ResetQueueColumnAutoFitIfQueueIsEmpty();
         technicalLog.Append($"Cleared {removableItems.Count} queue item(s).");
         RefreshQueueGrid();
         RefreshStatusLog(removableItems.Count == 1 ? "Cleared one queue item." : $"Cleared {removableItems.Count} queue items.");
@@ -630,13 +872,29 @@ public sealed class MainForm : Form
 
     private void ClearCompletedQueueButton_Click(object? sender, EventArgs e)
     {
-        var removedCount = queueItems.RemoveAll(item => item.Status == QueueItemStatus.Completed);
+        var removedCount = queueItems.RemoveAll(item => item.Status is QueueItemStatus.Completed
+            or QueueItemStatus.Skipped
+            or QueueItemStatus.Failed
+            or QueueItemStatus.Canceled
+            or QueueItemStatus.Unsupported
+            or QueueItemStatus.Invalid);
+        ResetQueueColumnAutoFitIfQueueIsEmpty();
         technicalLog.Append($"Cleared {removedCount} completed queue item(s).");
         RefreshQueueGrid();
         RefreshStatusLog(removedCount == 1 ? "Cleared one completed item." : $"Cleared {removedCount} completed items.");
     }
 
-    private void OutputDestinationRadioButton_CheckedChanged(object? sender, EventArgs e)
+    private void ResetQueueColumnAutoFitIfQueueIsEmpty()
+    {
+        if (queueItems.Count != 0)
+        {
+            return;
+        }
+
+        queueColumnsUserResized = false;
+    }
+
+    private async void OutputDestinationRadioButton_CheckedChanged(object? sender, EventArgs e)
     {
         if (isInitializing || !((RadioButton)sender!).Checked)
         {
@@ -653,9 +911,10 @@ public sealed class MainForm : Form
         SaveCurrentSettings();
         RefreshStatusLog("Output destination changed.");
         UpdateConvertButtonState();
+        await RefreshQueuedItemsFromCurrentSettingsAsync("Output destination changed");
     }
 
-    private void OutputFormatComboBox_SelectedIndexChanged(object? sender, EventArgs e)
+    private async void OutputFormatComboBox_SelectedIndexChanged(object? sender, EventArgs e)
     {
         if (isInitializing)
         {
@@ -667,19 +926,21 @@ public sealed class MainForm : Form
         SaveCurrentSettings();
         RefreshStatusLog("Output format changed.");
         UpdateConvertButtonState();
+        await RefreshQueuedItemsFromCurrentSettingsAsync("Output format changed");
     }
 
-    private void ConversionModeComboBox_SelectedIndexChanged(object? sender, EventArgs e)
+    private async void ConversionModeComboBox_SelectedIndexChanged(object? sender, EventArgs e)
     {
         if (isInitializing)
         {
             return;
         }
 
-        technicalLog.Append($"Conversion mode changed to {GetSelectedConversionMode()}.");
+        technicalLog.Append($"Conversion mode changed to {GetSelectedConversionModeForDisplay()}.");
         SaveCurrentSettings();
         RefreshStatusLog("Conversion mode changed.");
         UpdateConvertButtonState();
+        await RefreshQueuedItemsFromCurrentSettingsAsync("Conversion mode changed");
     }
 
     private async void FrameRateComboBox_SelectedIndexChanged(object? sender, EventArgs e)
@@ -696,20 +957,9 @@ public sealed class MainForm : Form
         SaveCurrentSettings();
         RefreshStatusLog("Frame rate changed. Probe validation is required for the new FPS setting.");
         UpdateConvertButtonState();
+        await RefreshQueuedItemsFromCurrentSettingsAsync("Frame rate changed");
         await PreProbeWaitingQueueItemsIfIdleAsync();
         await StartProbeIfReadyAsync();
-    }
-
-    private void SkipExistingOutputCheckBox_CheckedChanged(object? sender, EventArgs e)
-    {
-        if (isInitializing)
-        {
-            return;
-        }
-
-        technicalLog.Append($"Selected-output skip behavior changed for future queue additions. Skip existing selected output format: {FormatYesNo(skipExistingOutputCheckBox.Checked)}.");
-        RefreshStatusLog("Existing-output behavior changed for newly added files.");
-        UpdateConvertButtonState();
     }
 
     private async void ConvertButton_Click(object? sender, EventArgs e)
@@ -839,7 +1089,7 @@ public sealed class MainForm : Form
         await StartProbeIfReadyAsync();
     }
 
-    private void ApplyOutputFolderSelection(string folderPath)
+    private async void ApplyOutputFolderSelection(string folderPath)
     {
         selectionState.ChosenOutputFolderPath = folderPath;
         ValidateOutputDestination();
@@ -852,6 +1102,7 @@ public sealed class MainForm : Form
         SaveCurrentSettings();
         RefreshStatusLog(selectionState.IsOutputFolderValid ? "Output folder selected." : validationMessage);
         UpdateConvertButtonState();
+        await RefreshQueuedItemsFromCurrentSettingsAsync("Output folder changed");
     }
 
     private async void AddFilesToQueue(IReadOnlyCollection<string> filePaths)
@@ -931,14 +1182,12 @@ public sealed class MainForm : Form
                 outputFormat,
                 addSettings.ConversionMode,
                 addSettings.Fps,
-                hasExistingDirectOutput,
-                addSettings.SkipIfDirectOutputExists);
-
+                hasExistingDirectOutput);
             queueItems.Add(item);
             newlyAddedItems.Add(item);
             addedCount++;
             firstAddedPath ??= validation.FilePath;
-            technicalLog.Append($"Queued file. Input: {item.InputPath}; Output: {item.PlannedOutputPath}; Status: {item.StatusText}; Format: {item.OutputFormat.DisplayName()}; Mode: {item.ConversionMode}; FPS: {item.Fps.Label} ({item.Fps.FfmpegValue}); Destination: {FormatOutputDestinationMode(item.OutputDestinationMode)}.");
+            technicalLog.Append($"Queued file. Input: {item.InputPath}; Output: {item.PlannedOutputPath}; Status: {item.StatusText}; Format: {item.OutputFormat.DisplayName()}; Mode: {FormatConversionModeForDisplay(item.ConversionMode)}; FPS: {item.Fps.Label} ({item.Fps.FfmpegValue}); Destination: {FormatOutputDestinationMode(item.OutputDestinationMode)}.");
         }
 
         if (overflowCount > 0)
@@ -1078,7 +1327,7 @@ public sealed class MainForm : Form
 
                     if (probeResult.IsSuccess)
                     {
-                        if (item.SkipIfDirectOutputExists && item.HasExistingDirectOutput)
+                        if (item.HasExistingDirectOutput)
                         {
                             selectedOutputExistsCount++;
                             SetQueueItemStatus(item, QueueItemStatus.Skipped, "Exists", "Selected output exists");
@@ -1086,9 +1335,7 @@ public sealed class MainForm : Form
                         else
                         {
                             readyCount++;
-                            var statusText = item.HasExistingDirectOutput ? "Already converted?" : "Ready";
-                            var status = item.HasExistingDirectOutput ? QueueItemStatus.Warning : QueueItemStatus.Ready;
-                            SetQueueItemStatus(item, status, statusText, FormatProbeProgressText(probeResult));
+                            SetQueueItemStatus(item, QueueItemStatus.Ready, "Ready", FormatProbeProgressText(probeResult));
                         }
 
                         technicalLog.Append($"Queue pre-probe succeeded. Input: {item.InputPath}; Codec: {FormatOptionalValue(probeResult.CodecName, "unknown")}; Resolution: {FormatResolution(probeResult.Width, probeResult.Height)}; Profile: {FormatOptionalValue(probeResult.Profile, "unknown")}.");
@@ -1129,6 +1376,34 @@ public sealed class MainForm : Form
         return string.Equals(resolution, "unknown", StringComparison.OrdinalIgnoreCase)
             ? "Ready"
             : resolution;
+    }
+
+    private async Task RefreshQueuedItemsFromCurrentSettingsAsync(string reason)
+    {
+        if (isQueueProcessing || queueItems.Count == 0)
+        {
+            return;
+        }
+
+        var settings = CaptureCurrentQueueSettings();
+        var result = QueueItemRefreshService.RefreshEditableItems(
+            queueItems,
+            settings,
+            (item, refreshSettings) => ResolveActiveQueueOutputFolder(item.InputPath, refreshSettings),
+            (item, outputFolderPath, outputFormat) => PlanQueueOutputPath(item.InputPath, outputFolderPath, outputFormat, item),
+            GetDirectOutputPathForQueueRefresh);
+
+        if (result.RefreshedCount == 0 && result.InvalidCount == 0)
+        {
+            UpdateQueueButtonState();
+            return;
+        }
+
+        technicalLog.Append($"Queue refreshed from current settings. Reason: {reason}; Items refreshed: {result.RefreshedCount}; Items invalid: {result.InvalidCount}; Settings: {FormatQueueSettings(settings)}; Destination: {FormatOutputDestinationMode(settings.OutputDestinationMode)}; Chosen folder: {FormatOptionalValue(settings.ChosenOutputFolder, "none")}.");
+        RefreshQueueGrid();
+        RefreshDetailsText();
+        UpdateConvertButtonState();
+        await PreProbeWaitingQueueItemsIfIdleAsync();
     }
 
     private FolderQueueAddPreview CreateFolderQueueAddPreview(IReadOnlyCollection<string> filePaths, QueueSettingsSnapshot addSettings)
@@ -1225,13 +1500,12 @@ public sealed class MainForm : Form
             selectionState.OutputDestinationMode,
             selectionState.OutputDestinationMode == OutputDestinationMode.ChooseOutputFolder
                 ? selectionState.ChosenOutputFolderPath
-                : null,
-            skipExistingOutputCheckBox.Checked);
+                : null);
     }
 
     private static string FormatQueueSettings(QueueSettingsSnapshot settings)
     {
-        return $"Format: {settings.OutputFormat.DisplayName()} | Mode: {settings.ConversionMode} | Source FPS: {settings.Fps.Label}";
+        return $"Format: {settings.OutputFormat.DisplayName()} | Mode: {FormatConversionModeForDisplay(settings.ConversionMode)} | Source FPS: {settings.Fps.Label}";
     }
 
     private void ShowAddWhileRunningWarningIfNeeded()
@@ -1271,6 +1545,17 @@ public sealed class MainForm : Form
 
     private string? GetDirectOutputPathForQueuedItem(QueueItem item)
     {
+        if (!string.IsNullOrWhiteSpace(item.CustomOutputPath))
+        {
+            var customValidation = OutputPathService.ValidateCustomOutputPath(
+                item.InputPath,
+                item.CustomOutputPath,
+                item.OutputFormat,
+                requireAvailable: false,
+                allowExtensionCorrection: true);
+            return customValidation.IsValid ? customValidation.OutputPath : null;
+        }
+
         var outputFolderPath = item.OutputDestinationMode == OutputDestinationMode.SameFolderAsSource
             ? Path.GetDirectoryName(item.InputPath)
             : item.SelectedOutputFolder;
@@ -1278,8 +1563,48 @@ public sealed class MainForm : Form
         return OutputPathService.GetDirectOutputPath(item.InputPath, outputFolderPath, item.OutputFormat);
     }
 
+    private string? GetDirectOutputPathForQueueRefresh(QueueItem item, string outputFolderPath, OutputFormat outputFormat)
+    {
+        if (!string.IsNullOrWhiteSpace(item.CustomOutputPath))
+        {
+            var customValidation = OutputPathService.ValidateCustomOutputPath(
+                item.InputPath,
+                item.CustomOutputPath,
+                outputFormat,
+                requireAvailable: false,
+                allowExtensionCorrection: true);
+            return customValidation.IsValid ? customValidation.OutputPath : null;
+        }
+
+        return OutputPathService.GetDirectOutputPath(item.InputPath, outputFolderPath, outputFormat);
+    }
+
     private string? PlanQueueOutputPath(string inputPath, string outputFolderPath, OutputFormat outputFormat, QueueItem? excludedItem = null)
     {
+        if (!string.IsNullOrWhiteSpace(excludedItem?.CustomOutputPath))
+        {
+            var customValidation = OutputPathService.ValidateCustomOutputPath(
+                inputPath,
+                excludedItem.CustomOutputPath,
+                outputFormat,
+                requireAvailable: false,
+                allowExtensionCorrection: true);
+            if (!customValidation.IsValid || string.IsNullOrWhiteSpace(customValidation.OutputPath))
+            {
+                return null;
+            }
+
+            excludedItem.CustomOutputPath = customValidation.OutputPath;
+            if (File.Exists(customValidation.OutputPath))
+            {
+                return customValidation.OutputPath;
+            }
+
+            return IsAvailableQueueOutputPath(customValidation.OutputPath, excludedItem)
+                ? customValidation.OutputPath
+                : null;
+        }
+
         var directOutputPath = OutputPathService.GetDirectOutputPath(inputPath, outputFolderPath, outputFormat);
         if (string.IsNullOrWhiteSpace(directOutputPath))
         {
@@ -1299,24 +1624,9 @@ public sealed class MainForm : Form
             return null;
         }
 
-        var convertedPath = Path.Combine(outputFolderPath, inputBaseName + "_converted" + extension);
-        if (OutputPathService.IsSafeOutputPath(inputPath, convertedPath) &&
-            IsAvailableQueueOutputPath(convertedPath, excludedItem))
-        {
-            return convertedPath;
-        }
-
-        for (var index = 1; index <= 9999; index++)
-        {
-            var candidatePath = Path.Combine(outputFolderPath, $"{inputBaseName}_{index:00}{extension}");
-            if (OutputPathService.IsSafeOutputPath(inputPath, candidatePath) &&
-                IsAvailableQueueOutputPath(candidatePath, excludedItem))
-            {
-                return candidatePath;
-            }
-        }
-
-        return null;
+        return OutputPathService.IsSafeOutputPath(inputPath, directOutputPath)
+            ? directOutputPath
+            : null;
     }
 
     private bool IsAvailableQueueOutputPath(string outputPath, QueueItem? excludedItem = null)
@@ -1345,7 +1655,7 @@ public sealed class MainForm : Form
                 continue;
             }
 
-            var directOutputPath = OutputPathService.GetDirectOutputPath(item.InputPath, outputFolderValidation.FolderPath, settings.OutputFormat);
+            var directOutputPath = GetDirectOutputPathForQueueRefresh(item, outputFolderValidation.FolderPath, settings.OutputFormat);
             var hasExistingDirectOutput = !string.IsNullOrWhiteSpace(directOutputPath) && File.Exists(directOutputPath);
             var plannedOutputPath = PlanQueueOutputPath(item.InputPath, outputFolderValidation.FolderPath, settings.OutputFormat, item);
             if (string.IsNullOrWhiteSpace(plannedOutputPath))
@@ -1391,7 +1701,7 @@ public sealed class MainForm : Form
                 Path.GetFileName(item.InputPath),
                 item.PlannedOutputPath,
                 item.OutputFormat.DisplayName(),
-                item.ConversionMode,
+                FormatConversionModeForDisplay(item.ConversionMode),
                 item.Fps.Label,
                 item.ProgressText);
             queueGridView.Rows[rowIndex].Tag = item;
@@ -1418,7 +1728,59 @@ public sealed class MainForm : Form
         }
 
         queueGridView.ClearSelection();
+        ApplyQueueAutoFitColumnWidths();
         UpdateQueueButtonState();
+    }
+
+    private void ApplyQueueAutoFitColumnWidths()
+    {
+        if (queueColumnsUserResized || queueGridView.Columns.Count == 0 || queueGridView.ClientSize.Width <= 0)
+        {
+            return;
+        }
+
+        var availableWidth = queueGridView.ClientSize.Width - 2;
+        if (queueGridView.Rows.Count > 0 && queueGridView.DisplayedRowCount(includePartialRow: false) < queueGridView.Rows.Count)
+        {
+            availableWidth -= SystemInformation.VerticalScrollBarWidth;
+        }
+
+        const int minimumFileWidth = 150;
+        const int minimumOutputWidth = 220;
+        var fixedWidth =
+            QueueStatusColumnWidth +
+            QueueFormatColumnWidth +
+            QueueModeColumnWidth +
+            QueueFpsColumnWidth +
+            QueueProgressColumnWidth;
+        var flexibleWidth = Math.Max(minimumFileWidth + minimumOutputWidth, availableWidth - fixedWidth);
+        var extraFlexibleWidth = Math.Max(0, flexibleWidth - QueueFileColumnWidth - QueueOutputColumnWidth);
+        var fileWidth = Math.Max(minimumFileWidth, QueueFileColumnWidth + (int)Math.Round(extraFlexibleWidth * 0.4D));
+        var outputWidth = Math.Max(minimumOutputWidth, flexibleWidth - fileWidth);
+
+        isApplyingQueueColumnWidths = true;
+        try
+        {
+            SetQueueColumnWidth("Status", QueueStatusColumnWidth);
+            SetQueueColumnWidth("File", fileWidth);
+            SetQueueColumnWidth("Output", outputWidth);
+            SetQueueColumnWidth("Format", QueueFormatColumnWidth);
+            SetQueueColumnWidth("Mode", QueueModeColumnWidth);
+            SetQueueColumnWidth("Fps", QueueFpsColumnWidth);
+            SetQueueColumnWidth("Progress", QueueProgressColumnWidth);
+        }
+        finally
+        {
+            isApplyingQueueColumnWidths = false;
+        }
+    }
+
+    private void SetQueueColumnWidth(string columnName, int width)
+    {
+        if (queueGridView.Columns[columnName] is { } column)
+        {
+            column.Width = width;
+        }
     }
 
     private void UpdateQueueButtonState()
@@ -1480,7 +1842,7 @@ public sealed class MainForm : Form
         conversionProgressBar.Style = ProgressBarStyle.Blocks;
         conversionProgressBar.MarqueeAnimationSpeed = 0;
         conversionProgressBar.Value = 0;
-        technicalLog.Append($"Queue started. Processable items: {queueItems.Count(IsProcessableQueueItem)}; Total queued: {queueItems.Count}; Active settings: {FormatQueueSettings(activeQueueSettings)}; Destination: {FormatOutputDestinationMode(activeQueueSettings.OutputDestinationMode)}; Chosen folder: {FormatOptionalValue(activeQueueSettings.ChosenOutputFolder, "none")}; Skip existing selected format: {FormatYesNo(activeQueueSettings.SkipIfDirectOutputExists)}.");
+        technicalLog.Append($"Queue started. Processable items: {queueItems.Count(IsProcessableQueueItem)}; Total queued: {queueItems.Count}; Active settings: {FormatQueueSettings(activeQueueSettings)}; Destination: {FormatOutputDestinationMode(activeQueueSettings.OutputDestinationMode)}; Chosen folder: {FormatOptionalValue(activeQueueSettings.ChosenOutputFolder, "none")}.");
         RefreshStatusLog($"Queue started. Processing 1 of {queueItems.Count(IsProcessableQueueItem)}.");
 
         var queueCanceled = false;
@@ -1563,7 +1925,7 @@ public sealed class MainForm : Form
     {
         var fileName = Path.GetFileName(item.InputPath);
         SetQueueItemStatus(item, QueueItemStatus.Probing, "Probing", "");
-        technicalLog.Append($"Queue item start. {ordinal} of {totalItems}; Input: {item.InputPath}; Planned output: {item.PlannedOutputPath}; Format: {item.OutputFormat.DisplayName()}; Mode: {item.ConversionMode}; FPS: {item.Fps.Label} ({item.Fps.FfmpegValue}).");
+        technicalLog.Append($"Queue item start. {ordinal} of {totalItems}; Input: {item.InputPath}; Planned output: {item.PlannedOutputPath}; Format: {item.OutputFormat.DisplayName()}; Mode: {FormatConversionModeForDisplay(item.ConversionMode)}; FPS: {item.Fps.Label} ({item.Fps.FfmpegValue}).");
         RefreshStatusLog($"Processing {ordinal} of {totalItems}: {fileName}");
 
         var inputValidation = InputFileValidator.ValidateDatFile(item.InputPath);
@@ -1643,7 +2005,12 @@ public sealed class MainForm : Form
     private bool IsProcessableQueueItem(QueueItem item)
     {
         return item.Status == QueueItemStatus.Ready ||
-               (item.Status == QueueItemStatus.Warning && item.PreProbeResult?.IsSuccess == true);
+               (item.Status == QueueItemStatus.Warning && item.PreProbeResult?.IsSuccess == true && !CustomOutputPathExists(item));
+    }
+
+    private static bool CustomOutputPathExists(QueueItem item)
+    {
+        return !string.IsNullOrWhiteSpace(item.CustomOutputPath) && File.Exists(item.CustomOutputPath);
     }
 
     private bool HasPendingQueueValidation()
@@ -1661,6 +2028,33 @@ public sealed class MainForm : Form
 
     private QueueOutputSafetyResult RecheckQueueOutputSafety(QueueItem item)
     {
+        if (!string.IsNullOrWhiteSpace(item.CustomOutputPath))
+        {
+            var customValidation = OutputPathService.ValidateCustomOutputPath(
+                item.InputPath,
+                item.CustomOutputPath,
+                item.OutputFormat,
+                requireAvailable: false,
+                allowExtensionCorrection: true);
+            if (!customValidation.IsValid || string.IsNullOrWhiteSpace(customValidation.OutputPath))
+            {
+                return QueueOutputSafetyResult.Fail(customValidation.Message);
+            }
+
+            item.CustomOutputPath = customValidation.OutputPath;
+            if (File.Exists(customValidation.OutputPath))
+            {
+                return QueueOutputSafetyResult.Skip("Exists", "Selected output exists", $"Custom Save As output already exists: {customValidation.OutputPath}");
+            }
+
+            if (!IsAvailableQueueOutputPath(customValidation.OutputPath, item))
+            {
+                return QueueOutputSafetyResult.Fail($"Custom Save As output is already used by another queued item: {customValidation.OutputPath}");
+            }
+
+            return QueueOutputSafetyResult.Convert(customValidation.OutputPath, "Custom Save As output safety check passed.");
+        }
+
         var outputFolderPath = item.OutputDestinationMode == OutputDestinationMode.SameFolderAsSource
             ? Path.GetDirectoryName(item.InputPath)
             : item.SelectedOutputFolder;
@@ -1675,7 +2069,7 @@ public sealed class MainForm : Form
         var directOutputExists = !string.IsNullOrWhiteSpace(directOutputPath) && File.Exists(directOutputPath);
         var plannedOutputIsDirectOutput = !string.IsNullOrWhiteSpace(directOutputPath) &&
                                           string.Equals(item.PlannedOutputPath, directOutputPath, StringComparison.OrdinalIgnoreCase);
-        if (directOutputExists && item.SkipIfDirectOutputExists && (item.HasExistingDirectOutput || plannedOutputIsDirectOutput))
+        if (directOutputExists && (item.HasExistingDirectOutput || plannedOutputIsDirectOutput))
         {
             return QueueOutputSafetyResult.Skip("Exists", "Selected output exists", $"Direct selected-format output already exists: {directOutputPath}");
         }
@@ -1829,7 +2223,7 @@ public sealed class MainForm : Form
         var fps = GetSelectedFpsOption();
         var duration = GetProbeDuration();
         var hasDuration = duration.HasValue && duration.Value > TimeSpan.Zero;
-        technicalLog.Append($"Starting conversion. Mode: {conversionMode}; Format: {outputFormat}; FPS: {fps.Label} ({fps.FfmpegValue}); Input: {inputPath}; Output: {outputPath}; Duration available: {FormatYesNo(hasDuration)}; Duration: {FormatDuration(duration)}; Progress mode: {(hasDuration ? "Determinate" : "Indeterminate")}.");
+        technicalLog.Append($"Starting conversion. Mode: {FormatConversionModeForDisplay(conversionMode)}; Format: {outputFormat}; FPS: {fps.Label} ({fps.FfmpegValue}); Input: {inputPath}; Output: {outputPath}; Duration available: {FormatYesNo(hasDuration)}; Duration: {FormatDuration(duration)}; Progress mode: {(hasDuration ? "Determinate" : "Indeterminate")}.");
 
         isConversionRunning = true;
         lastConversionResult = null;
@@ -1841,7 +2235,7 @@ public sealed class MainForm : Form
         SetControlsEnabledForConversion(false);
         ConfigureProgressBarForConversion(hasDuration);
         conversionProgressBar.Value = 0;
-        currentConversionHeadline = $"Starting {conversionMode.ToLowerInvariant()}...";
+        currentConversionHeadline = "Starting conversion...";
         RefreshStatusLog(currentConversionHeadline);
         UpdateConvertButtonState();
         cancelButton.Enabled = true;
@@ -1851,7 +2245,7 @@ public sealed class MainForm : Form
         ConversionResult result;
         try
         {
-            currentConversionHeadline = string.Equals(conversionMode, "Encode", StringComparison.OrdinalIgnoreCase) ? "Encoding..." : "Remuxing...";
+            currentConversionHeadline = "Converting...";
             RefreshStatusLog(currentConversionHeadline);
             result = string.Equals(conversionMode, "Encode", StringComparison.OrdinalIgnoreCase)
                 ? await conversionService.EncodeAsync(inputPath, outputPath, outputFormat, fps, duration, progress, conversionCancellationTokenSource.Token)
@@ -1906,7 +2300,6 @@ public sealed class MainForm : Form
         var allowQueueEditing = enabled || isQueueProcessing;
         browseFileButton.Enabled = allowQueueEditing && ffmpegTools.AreAvailable;
         addFolderButton.Enabled = allowQueueEditing && ffmpegTools.AreAvailable;
-        skipExistingOutputCheckBox.Enabled = enabled;
         queueGridView.Enabled = allowQueueEditing;
         startQueueButton.Enabled = false;
         stopAfterCurrentButton.Enabled = false;
@@ -1994,10 +2387,9 @@ public sealed class MainForm : Form
         }
 
         lastProgressUiUpdateUtc = now;
-        var verb = string.Equals(conversionMode, "Encode", StringComparison.OrdinalIgnoreCase) ? "Encoding" : "Remuxing";
         currentConversionHeadline = progress.Percent.HasValue
-            ? $"{verb}... {progress.Percent.Value}%"
-            : $"{verb}... {progress.Summary}";
+            ? $"Converting... {progress.Percent.Value}%"
+            : $"Converting... {progress.Summary}";
         RefreshStatusLog(currentConversionHeadline);
     }
 
@@ -2136,7 +2528,7 @@ public sealed class MainForm : Form
         }
 
         lines.Add($"Output format: {GetSelectedOutputFormat().DisplayName()}");
-        lines.Add($"Mode: {GetSelectedConversionMode()}");
+        lines.Add($"Mode: {GetSelectedConversionModeForDisplay()}");
         var fps = GetSelectedFpsOption();
         lines.Add($"Selected source FPS: {fps.Label} (FFmpeg value: {fps.FfmpegValue})");
         lines.Add($"Probe status: {FormatProbeStatus()}");
@@ -2217,7 +2609,27 @@ public sealed class MainForm : Form
 
     private string GetSelectedConversionMode()
     {
-        return conversionModeComboBox.SelectedItem?.ToString() ?? "Remux";
+        return ParseConversionModeDisplay(conversionModeComboBox.SelectedItem?.ToString());
+    }
+
+    private string GetSelectedConversionModeForDisplay()
+    {
+        return FormatConversionModeForDisplay(GetSelectedConversionMode());
+    }
+
+    private static string ParseConversionModeDisplay(string? value)
+    {
+        return string.Equals(value, "Full", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(value, "Encode", StringComparison.OrdinalIgnoreCase)
+            ? "Encode"
+            : "Remux";
+    }
+
+    private static string FormatConversionModeForDisplay(string? conversionMode)
+    {
+        return string.Equals(conversionMode, "Encode", StringComparison.OrdinalIgnoreCase)
+            ? "Full"
+            : "Fast";
     }
 
     private string GetSelectedFrameRate()
@@ -2325,7 +2737,7 @@ public sealed class MainForm : Form
         lines.Add("Conversion details:");
         lines.Add($"Tool path: {result.FfmpegPath}");
         lines.Add($"Command: {result.CommandLine}");
-        lines.Add($"Conversion mode: {FormatOptionalValue(result.ConversionMode, "Unknown")}");
+        lines.Add($"Mode: {FormatConversionModeForDisplay(result.ConversionMode)}");
         lines.Add($"Output format: {FormatOptionalValue(result.OutputFormat, "Unknown")}");
         lines.Add($"Input: {result.InputPath}");
         lines.Add($"Output: {result.OutputPath}");
@@ -2374,8 +2786,12 @@ public sealed class MainForm : Form
 
     private void AppendConversionResultToLog(ConversionResult result)
     {
-        technicalLog.Append($"Conversion {(result.IsSuccess ? "succeeded" : result.WasCanceled ? "canceled" : "failed")}. Mode: {result.ConversionMode}; Format: {result.OutputFormat}; Output: {result.OutputPath}; Exit code: {FormatExitCode(result.ExitCode)}; Canceled: {FormatYesNo(result.WasCanceled)}; Timed out: {FormatYesNo(result.TimedOut)}; Duration available: {FormatYesNo(result.Duration.HasValue)}; Progress mode: {(result.UsedDeterminateProgress ? "Determinate" : "Indeterminate")}.");
+        technicalLog.Append($"Conversion {(result.IsSuccess ? "succeeded" : result.WasCanceled ? "canceled" : "failed")}. Mode: {FormatConversionModeForDisplay(result.ConversionMode)}; Format: {result.OutputFormat}; Output: {result.OutputPath}; Exit code: {FormatExitCode(result.ExitCode)}; Canceled: {FormatYesNo(result.WasCanceled)}; Timed out: {FormatYesNo(result.TimedOut)}; Duration available: {FormatYesNo(result.Duration.HasValue)}; Progress mode: {(result.UsedDeterminateProgress ? "Determinate" : "Indeterminate")}.");
         technicalLog.Append($"FFmpeg command: {result.CommandLine}");
+        if (IsMp4RemuxResult(result))
+        {
+            technicalLog.Append("Fast MP4 compatibility options: video-only stream mapping, avc1 tag, zero-based timestamps, 90k timescale, faststart.");
+        }
 
         if (!string.IsNullOrWhiteSpace(result.PartialOutputMessage))
         {
@@ -2387,6 +2803,13 @@ public sealed class MainForm : Form
             technicalLog.AppendBlock("FFmpeg stdout", result.StandardOutput);
             technicalLog.AppendBlock("FFmpeg stderr", result.StandardError);
         }
+    }
+
+    private static bool IsMp4RemuxResult(ConversionResult result)
+    {
+        return (string.Equals(result.ConversionMode, "Remux", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(result.ConversionMode, "Fast", StringComparison.OrdinalIgnoreCase)) &&
+            string.Equals(result.OutputFormat, OutputFormat.Mp4.DisplayName(), StringComparison.OrdinalIgnoreCase);
     }
 
     private static string FormatExitCode(int? exitCode)
@@ -2584,7 +3007,7 @@ public sealed class MainForm : Form
             RowCount = 3,
             Padding = new Padding(0, 2, 0, 2)
         };
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 124));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 33));
@@ -2675,17 +3098,27 @@ public sealed class MainForm : Form
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 48));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
+        var helpLabel = new Label
+        {
+            AutoSize = false,
+            Dock = DockStyle.Fill,
+            Text = "Double-click a row to change filename or save location.",
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = SystemColors.GrayText,
+            Margin = new Padding(2, 4, 0, 4)
+        };
+
         var noteLabel = new Label
         {
             AutoSize = false,
             Dock = DockStyle.Fill,
-            Text = "Queue items keep the settings they were added with.",
+            Text = "Option choices lock when queue starts.",
             TextAlign = ContentAlignment.MiddleRight,
             ForeColor = SystemColors.GrayText,
             Margin = new Padding(8, 4, 0, 4)
         };
 
-        panel.Controls.Add(skipExistingOutputCheckBox, 0, 0);
+        panel.Controls.Add(helpLabel, 0, 0);
         panel.Controls.Add(noteLabel, 1, 0);
         return panel;
     }
@@ -2817,6 +3250,7 @@ public sealed class MainForm : Form
             Size = new Size(112, 42),
             Margin = new Padding(6, 4, 0, 4),
             Text = text,
+            TextAlign = ContentAlignment.MiddleCenter,
             UseVisualStyleBackColor = true
         };
     }
@@ -2842,7 +3276,8 @@ public sealed class MainForm : Form
             AllowUserToAddRows = false,
             AllowUserToDeleteRows = false,
             AllowUserToResizeRows = false,
-            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            AllowUserToResizeColumns = true,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
             BackgroundColor = SystemColors.Window,
             BorderStyle = BorderStyle.FixedSingle,
             ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
@@ -2850,17 +3285,31 @@ public sealed class MainForm : Form
             MultiSelect = true,
             ReadOnly = true,
             RowHeadersVisible = false,
+            ScrollBars = ScrollBars.Both,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect
         };
 
-        gridView.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", HeaderText = "Status", FillWeight = 70 });
-        gridView.Columns.Add(new DataGridViewTextBoxColumn { Name = "File", HeaderText = "File", FillWeight = 130 });
-        gridView.Columns.Add(new DataGridViewTextBoxColumn { Name = "Output", HeaderText = "Output", FillWeight = 180 });
-        gridView.Columns.Add(new DataGridViewTextBoxColumn { Name = "Format", HeaderText = "Format", FillWeight = 45 });
-        gridView.Columns.Add(new DataGridViewTextBoxColumn { Name = "Mode", HeaderText = "Mode", FillWeight = 55 });
-        gridView.Columns.Add(new DataGridViewTextBoxColumn { Name = "Fps", HeaderText = "FPS", FillWeight = 45 });
-        gridView.Columns.Add(new DataGridViewTextBoxColumn { Name = "Progress", HeaderText = "Progress", FillWeight = 70 });
+        gridView.Columns.Add(CreateQueueColumn("Status", "Status", QueueStatusColumnWidth));
+        gridView.Columns.Add(CreateQueueColumn("File", "File", QueueFileColumnWidth));
+        gridView.Columns.Add(CreateQueueColumn("Output", "Output", QueueOutputColumnWidth));
+        gridView.Columns.Add(CreateQueueColumn("Format", "Format", QueueFormatColumnWidth));
+        gridView.Columns.Add(CreateQueueColumn("Mode", "Mode", QueueModeColumnWidth));
+        gridView.Columns.Add(CreateQueueColumn("Fps", "FPS", QueueFpsColumnWidth));
+        gridView.Columns.Add(CreateQueueColumn("Progress", "Progress", QueueProgressColumnWidth));
         return gridView;
+    }
+
+    private static DataGridViewTextBoxColumn CreateQueueColumn(string name, string headerText, int width)
+    {
+        return new DataGridViewTextBoxColumn
+        {
+            Name = name,
+            HeaderText = headerText,
+            AutoSizeMode = DataGridViewAutoSizeColumnMode.None,
+            MinimumWidth = Math.Min(width, 70),
+            Resizable = DataGridViewTriState.True,
+            Width = width
+        };
     }
 
     private sealed class BufferedDataGridView : DataGridView

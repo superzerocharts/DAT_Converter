@@ -16,16 +16,31 @@ Use this checklist for each DAT Converter portable release.
 ```
 
 - Confirm the build has 0 errors and ideally 0 warnings.
+- Run tests:
+
+```powershell
+.\.dotnet\dotnet.exe test .\DatConverter.sln
+```
+
 - Run a live queue QA smoke test:
   - Add multiple `.dat` files.
-  - Run Remux MP4/MKV.
-  - Run Encode MP4/MKV where practical.
+  - Run Fast mode MP4/MKV.
+  - Run Full mode MP4/MKV where practical.
   - Verify Add Files/Add Folder while running.
   - Verify Stop After Current.
   - Verify Cancel Current and partial output handling.
-  - Verify existing-output skip behavior.
-  - Verify duplicate base-name output reservation in a chosen output folder.
+  - Verify existing-output rows are marked Exists.
+  - Verify Exists rows can be corrected with Save As.
   - Verify source `.dat` SHA-256 hashes are unchanged.
+- Run MP4 Fast mode playback QA:
+  - Convert the known sample to MP4 Fast mode.
+  - Copy the output to a simple local path such as `C:\Temp\dat_converter_test.mp4`.
+  - Open it in VLC.
+  - Open it in Chrome/Edge or on another device when available.
+  - Optionally open it in Microsoft Media Player / Windows Media Player, but first confirm that the same local player can open a known-good unrelated MP4.
+  - Confirm duration/timing looks correct.
+  - If Microsoft players fail for both DAT Converter output and known-good MP4 controls, treat that as a local Windows player/media-stack issue.
+  - If only DAT Converter Fast output fails in otherwise healthy players, preserve the failed output, capture ffprobe output for the MP4, then test Full mode.
 
 ## Publish
 

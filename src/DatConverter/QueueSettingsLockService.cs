@@ -19,9 +19,8 @@ public static class QueueSettingsLockService
         item.ConversionMode = settings.ConversionMode;
         item.Fps = settings.Fps;
         item.HasExistingDirectOutput = hasExistingDirectOutput;
-        item.SkipIfDirectOutputExists = settings.SkipIfDirectOutputExists;
 
-        if (hasExistingDirectOutput && settings.SkipIfDirectOutputExists)
+        if (hasExistingDirectOutput)
         {
             item.Status = QueueItemStatus.Skipped;
             item.StatusText = "Exists";
@@ -29,8 +28,8 @@ public static class QueueSettingsLockService
             return;
         }
 
-        item.Status = hasExistingDirectOutput ? QueueItemStatus.Warning : QueueItemStatus.Ready;
-        item.StatusText = hasExistingDirectOutput ? "Already converted?" : "Ready";
+        item.Status = QueueItemStatus.Ready;
+        item.StatusText = "Ready";
         item.ProgressText = string.IsNullOrWhiteSpace(readyProgressText) ? "Ready" : readyProgressText;
     }
 }

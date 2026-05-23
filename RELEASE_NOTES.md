@@ -7,7 +7,7 @@ DAT Converter v0.2.0 is the first queue-capable portable build.
 ### Core Conversion
 
 - Converts compatible raw H.264 `.dat` video payloads to MP4 or MKV.
-- Supports Remux and Encode modes.
+- Supports Fast and Full modes.
 - Provides FPS options including 29.97, which uses `30000/1001` internally.
 - Uses bundled FFmpeg tools only from `tools\ffmpeg`.
 - Runs raw H.264 probe validation before conversion.
@@ -29,8 +29,7 @@ DAT Converter v0.2.0 is the first queue-capable portable build.
 - Source `.dat` files are never modified, renamed, deleted, or opened for writing.
 - Existing outputs are never overwritten.
 - Existing `.partial` files are never overwritten.
-- Files with direct matching MP4/MKV output are skipped by default.
-- Output conflicts use safe alternate names.
+- Files with existing output paths are marked Exists until the user chooses a new Save As path.
 - Technical details are hidden by default and available through **Show Details** / **Copy Log**.
 
 ### Known Limitations

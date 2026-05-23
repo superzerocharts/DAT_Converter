@@ -28,11 +28,20 @@ if (!(Test-Path -LiteralPath $projectPath)) {
 $resolvedPublishRoot = [System.IO.Path]::GetFullPath($publishRoot)
 $resolvedStagingPath = [System.IO.Path]::GetFullPath($stagingPath)
 $resolvedPortablePath = [System.IO.Path]::GetFullPath($portablePath)
+$portableArchiveName = (Split-Path -Leaf $resolvedPortablePath) + ".zip"
+$resolvedArchivePath = [System.IO.Path]::GetFullPath((Join-Path $resolvedPublishRoot $portableArchiveName))
+$resolvedChecksumsPath = [System.IO.Path]::GetFullPath((Join-Path $resolvedPublishRoot "SHA256SUMS.txt"))
 if (!$resolvedPortablePath.StartsWith($resolvedPublishRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Refusing to clean output outside publish folder: $resolvedPortablePath"
 }
 if (!$resolvedStagingPath.StartsWith($resolvedPublishRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Refusing to clean staging output outside publish folder: $resolvedStagingPath"
+}
+if (!$resolvedArchivePath.StartsWith($resolvedPublishRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to create archive outside publish folder: $resolvedArchivePath"
+}
+if (!$resolvedChecksumsPath.StartsWith($resolvedPublishRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to create checksum file outside publish folder: $resolvedChecksumsPath"
 }
 
 if (Test-Path -LiteralPath $resolvedStagingPath) {
@@ -75,6 +84,12 @@ if ($LASTEXITCODE -ne 0) {
 
 if (Test-Path -LiteralPath $resolvedPortablePath) {
     Remove-Item -LiteralPath $resolvedPortablePath -Recurse -Force
+}
+if (Test-Path -LiteralPath $resolvedArchivePath) {
+    Remove-Item -LiteralPath $resolvedArchivePath -Force
+}
+if (Test-Path -LiteralPath $resolvedChecksumsPath) {
+    Remove-Item -LiteralPath $resolvedChecksumsPath -Force
 }
 
 New-Item -ItemType Directory -Path $resolvedPortablePath -Force | Out-Null
@@ -121,6 +136,10 @@ if (Test-Path -LiteralPath $noticesPath) {
     Copy-Item -LiteralPath $noticesPath -Destination (Join-Path $docsPath "THIRD_PARTY_NOTICES.md") -Force
 }
 
+Compress-Archive -Path (Join-Path $resolvedPortablePath "*") -DestinationPath $resolvedArchivePath -Force
+$archiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $resolvedArchivePath).Hash
+Set-Content -LiteralPath $resolvedChecksumsPath -Value "$archiveHash  $portableArchiveName"
+
 $ffmpegPath = Join-Path $portableToolsPath "ffmpeg.exe"
 $ffprobePath = Join-Path $portableToolsPath "ffprobe.exe"
 $hasFfmpeg = Test-Path -LiteralPath $ffmpegPath
@@ -130,6 +149,8 @@ Write-Host ""
 Write-Host "DAT Converter portable publish complete."
 Write-Host "Output: $resolvedPortablePath"
 Write-Host "Executable: $(Join-Path $resolvedPortablePath "DatConverter.exe")"
+Write-Host "Archive: $resolvedArchivePath"
+Write-Host "Checksums: $resolvedChecksumsPath"
 Write-Host "App publish mode: compressed self-contained single-file executable, with external FFmpeg tools"
 
 if ($hasFfmpeg -and $hasFfprobe) {

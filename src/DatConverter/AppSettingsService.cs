@@ -70,7 +70,11 @@ public sealed class AppSettingsService
             : OutputDestinationMode.SameFolderAsSource.ToString();
 
         settings.OutputFormat = string.Equals(settings.OutputFormat, "MKV", StringComparison.OrdinalIgnoreCase) ? "MKV" : "MP4";
-        settings.ConversionMode = string.Equals(settings.ConversionMode, "Encode", StringComparison.OrdinalIgnoreCase) ? "Encode" : "Remux";
+        settings.ConversionMode =
+            string.Equals(settings.ConversionMode, "Encode", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(settings.ConversionMode, "Full", StringComparison.OrdinalIgnoreCase)
+                ? "Encode"
+                : "Remux";
         settings.Fps = FpsOption.FromLabel(settings.Fps).Label;
 
         if (settings.WindowWidth < 960)

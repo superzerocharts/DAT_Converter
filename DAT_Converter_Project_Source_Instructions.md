@@ -42,10 +42,10 @@ Avoid Python/PyInstaller, Electron, or Tauri unless there is a strong reason to 
   - MP4
   - MKV
 - Conversion mode must be selectable:
-  - Remux / stream copy
-  - Encode / rebuild
-- Remux should be the default mode.
-- Encoding should be optional and user-selected.
+  - Fast
+  - Full
+- Fast mode should be the default mode.
+- Full mode should be optional and user-selected.
 - Frame rate must be user-selectable for input interpretation.
 - The app must not modify, overwrite, or delete the source `.dat` file.
 - The app is not a general video converter.
@@ -77,8 +77,8 @@ Required controls:
   - MP4
   - MKV
 - Conversion mode selector:
-  - Remux
-  - Encode
+  - Fast
+  - Full
 - Frame-rate selector.
 - Convert button.
 - Cancel button.
@@ -89,7 +89,7 @@ Required controls:
 Default UI state:
 
 - Output format: MP4
-- Mode: Remux
+- Mode: Fast
 - FPS: 30
 - Convert disabled until input validation/probe succeeds.
 - Cancel disabled until conversion is running.
@@ -121,7 +121,7 @@ Prior testing established the following:
   - profile: Baseline
   - resolution: 1920x1080
   - pixel format: yuvj420p
-- Fast remux to MP4 worked when interpreting the raw H.264 input at 30 FPS.
+- Fast mode to MP4 worked when interpreting the raw H.264 input at 30 FPS.
 - The output probed as:
   - `codec_name=h264`
   - `width=1920`
@@ -130,9 +130,9 @@ Prior testing established the following:
   - `avg_frame_rate=30/1`
   - `duration=297.266667`
 - VLC showed the output duration as 4:57, matching FFmpeg.
-- Clean re-encode also worked and fixed timing issues.
-- Earlier remux attempts without proper timestamp handling caused end-of-clip speed-up.
-- The final fast remux sample played correctly.
+- Full mode also worked and fixed timing issues.
+- Earlier Fast mode attempts without proper timestamp handling caused end-of-clip speed-up.
+- The final Fast mode sample played correctly.
 
 ## Core FFmpeg behavior
 
@@ -152,19 +152,24 @@ For 29.97 FPS, use:
 30000/1001
 ```
 
-## Proven fast remux command — MP4
+## Proven Fast mode command — MP4
 
 ```bat
 ffmpeg -y ^
   -fflags +genpts+discardcorrupt ^
   -err_detect ignore_err ^
   -f h264 -r SELECTED_FPS -i "INPUT.dat" ^
+  -map 0:v:0 ^
+  -an -sn -dn ^
   -c:v copy ^
+  -tag:v avc1 ^
+  -avoid_negative_ts make_zero ^
+  -video_track_timescale 90000 ^
   -movflags +faststart ^
   "OUTPUT.mp4"
 ```
 
-## Proven fast remux command — MKV
+## Proven Fast mode command — MKV
 
 ```bat
 ffmpeg -y ^
@@ -175,7 +180,7 @@ ffmpeg -y ^
   "OUTPUT.mkv"
 ```
 
-## Safe encode command — MP4
+## Safe Full mode command — MP4
 
 ```bat
 ffmpeg -y ^
@@ -189,7 +194,7 @@ ffmpeg -y ^
   "OUTPUT.mp4"
 ```
 
-## Safe encode command — MKV
+## Safe Full mode command — MKV
 
 ```bat
 ffmpeg -y ^
@@ -202,19 +207,20 @@ ffmpeg -y ^
   "OUTPUT.mkv"
 ```
 
-## Remux rules
+## Fast mode rules
 
-- Remux is the default.
-- Remux must use `-c:v copy`.
-- Remux should not re-encode.
-- Remux should be fast.
-- Remux should preserve original video quality.
-- If remux fails, suggest trying Encode mode.
-- If remux output has playback/timing issues, suggest trying Encode mode.
+- Fast mode is the default.
+- Fast mode must use `-c:v copy`.
+- Fast mode should not rebuild the video.
+- Fast mode should be fast.
+- Fast mode should preserve original video quality.
+- MP4 Fast mode should use `-map 0:v:0`, `-an -sn -dn`, `-tag:v avc1`, `-avoid_negative_ts make_zero`, `-video_track_timescale 90000`, and `-movflags +faststart` for conservative MP4 compatibility.
+- If Fast mode fails, suggest trying Full mode.
+- If Fast mode output has playback/timing issues, suggest trying Full mode.
 
-## Encode rules
+## Full mode rules
 
-Encoding is optional and user-selected.
+Full mode is optional and user-selected.
 
 Use:
 
@@ -224,11 +230,11 @@ Use:
 - `format=yuv420p`
 - `-an`
 
-MP4 encode should also use:
+MP4 Full mode should also use:
 
 - `-movflags +faststart`
 
-Encoding is slower than remuxing but more robust for bad timing, damaged timestamps, or playback issues.
+Full mode is slower than Fast mode but more robust for bad timing, damaged timestamps, or playback issues.
 
 No audio is included by default because the tested compatible `.dat` files contain video only.
 
@@ -331,22 +337,22 @@ Failed or canceled partial output files should be deleted or renamed with `.part
 - Preserve FFmpeg stdout/stderr in a technical log.
 - Show a simplified user-facing error message in the UI.
 - Include copyable or expandable technical details.
-- If remux fails, suggest trying Encode mode.
-- If encode fails, mark the file as unsupported or corrupt.
+- If Fast mode fails, suggest trying Full mode.
+- If Full mode fails, mark the file as unsupported or corrupt.
 - Never delete source files.
 
 Suggested user-facing outcomes:
 
-### Remux failed
+### Fast mode failed
 
 ```text
-Remux failed. This file may have timing or bitstream issues. Try Encode mode, which is slower but more tolerant.
+Fast mode failed. Try Full mode.
 ```
 
-### Encode failed
+### Full mode failed
 
 ```text
-Encode failed. This .dat file may be unsupported or corrupt.
+Full mode failed. This .dat file may be unsupported or corrupt.
 ```
 
 ### Missing FFmpeg tools
@@ -424,8 +430,8 @@ Preserve current behavior unless explicitly changing it.
 2. Add bundled FFmpeg/ffprobe path detection.
 3. Add `.dat` file selection and output folder selection.
 4. Add probe/validation.
-5. Add remux mode for MP4/MKV.
-6. Add encode mode for MP4/MKV.
+5. Add Fast mode for MP4/MKV.
+6. Add Full mode for MP4/MKV.
 7. Add progress parsing and cancellation.
 8. Add logging/error handling.
 9. Add packaging/publish workflow.

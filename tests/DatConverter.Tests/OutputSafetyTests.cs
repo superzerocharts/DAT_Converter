@@ -3,18 +3,16 @@ namespace DatConverter.Tests;
 public sealed class OutputSafetyTests
 {
     [Fact]
-    public void PlanOutputPath_UsesRequiredCollisionSequence()
+    public void PlanOutputPath_ReturnsDirectPathEvenWhenOutputExists()
     {
         using var temp = new TempDirectory();
         var inputPath = Path.Combine(temp.Path, "name.dat");
         File.WriteAllText(inputPath, "source");
         File.WriteAllText(Path.Combine(temp.Path, "name.mp4"), "existing");
-        File.WriteAllText(Path.Combine(temp.Path, "name_converted.mp4"), "existing");
-        File.WriteAllText(Path.Combine(temp.Path, "name_01.mp4"), "existing");
 
         var planned = OutputPathService.PlanOutputPath(inputPath, temp.Path, OutputFormat.Mp4);
 
-        Assert.Equal(Path.Combine(temp.Path, "name_02.mp4"), planned);
+        Assert.Equal(Path.Combine(temp.Path, "name.mp4"), planned);
     }
 
     [Fact]
@@ -39,6 +37,59 @@ public sealed class OutputSafetyTests
         var samePathViaRelativeSegment = Path.Combine(temp.Path, ".", "clip.dat");
 
         Assert.False(OutputPathService.IsSafeOutputPath(inputPath, samePathViaRelativeSegment));
+    }
+
+    [Fact]
+    public void ValidateCustomOutputPath_AppendsSelectedExtensionWhenMissing()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = Path.Combine(temp.Path, "source.dat");
+        File.WriteAllText(inputPath, "source");
+
+        var result = OutputPathService.ValidateCustomOutputPath(
+            inputPath,
+            Path.Combine(temp.Path, "renamed"),
+            OutputFormat.Mkv,
+            requireAvailable: true);
+
+        Assert.True(result.IsValid);
+        Assert.Equal(Path.Combine(temp.Path, "renamed.mkv"), result.OutputPath);
+    }
+
+    [Fact]
+    public void ValidateCustomOutputPath_RejectsWrongExtension()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = Path.Combine(temp.Path, "source.dat");
+        File.WriteAllText(inputPath, "source");
+
+        var result = OutputPathService.ValidateCustomOutputPath(
+            inputPath,
+            Path.Combine(temp.Path, "renamed.mkv"),
+            OutputFormat.Mp4,
+            requireAvailable: true);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(".mp4", result.Message);
+    }
+
+    [Fact]
+    public void ValidateCustomOutputPath_RejectsExistingOutputWhenAvailabilityIsRequired()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = Path.Combine(temp.Path, "source.dat");
+        var outputPath = Path.Combine(temp.Path, "renamed.mp4");
+        File.WriteAllText(inputPath, "source");
+        File.WriteAllText(outputPath, "existing");
+
+        var result = OutputPathService.ValidateCustomOutputPath(
+            inputPath,
+            outputPath,
+            OutputFormat.Mp4,
+            requireAvailable: true);
+
+        Assert.False(result.IsValid);
+        Assert.Equal("A file by that name already exists.", result.Message);
     }
 
     [Fact]
@@ -105,6 +156,36 @@ public sealed class OutputSafetyTests
         Assert.Equal(sourceLength, new FileInfo(sourcePath).Length);
         Assert.Equal(sourceTimestamp, File.GetLastWriteTimeUtc(sourcePath));
         Assert.Equal("original source bytes", File.ReadAllText(sourcePath));
+    }
+
+    [Fact]
+    public async Task ConversionService_BlocksExistingOutputBeforeStartingFfmpeg()
+    {
+        using var temp = new TempDirectory();
+        var sourcePath = Path.Combine(temp.Path, "source.dat");
+        var outputPath = Path.Combine(temp.Path, "source.mp4");
+        File.WriteAllText(sourcePath, "original source bytes");
+        File.WriteAllText(outputPath, "existing output bytes");
+        var outputLength = new FileInfo(outputPath).Length;
+        var outputTimestamp = File.GetLastWriteTimeUtc(outputPath);
+        var tools = new FfmpegTools(temp.Path, Path.Combine(temp.Path, "missing-ffmpeg.exe"), Path.Combine(temp.Path, "missing-ffprobe.exe"), false, false);
+        var service = new ConversionService(tools);
+
+        var result = await service.RemuxAsync(
+            sourcePath,
+            outputPath,
+            OutputFormat.Mp4,
+            FpsOption.FromLabel("30"),
+            null,
+            null,
+            CancellationToken.None);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("output file already exists", result.UserMessage);
+        Assert.True(File.Exists(outputPath));
+        Assert.Equal(outputLength, new FileInfo(outputPath).Length);
+        Assert.Equal(outputTimestamp, File.GetLastWriteTimeUtc(outputPath));
+        Assert.Equal("existing output bytes", File.ReadAllText(outputPath));
     }
 
     private sealed class TempDirectory : IDisposable

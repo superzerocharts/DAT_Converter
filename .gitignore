@@ -28,7 +28,7 @@ tools/ffmpeg/ffprobe.exe
 *.avi
 *.partial
 
-# Do not commit real Mirasys archive/source video files.
+# Do not commit real archive/source video files.
 *.dat
 
 # Keep the small sample required by the integration test suite.
