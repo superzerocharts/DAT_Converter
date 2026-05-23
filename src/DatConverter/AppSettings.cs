@@ -1,0 +1,18 @@
+namespace DatConverter;
+
+public sealed class AppSettings
+{
+    public string OutputDestinationMode { get; set; } = nameof(DatConverter.OutputDestinationMode.SameFolderAsSource);
+
+    public string LastChosenOutputFolder { get; set; } = string.Empty;
+
+    public string OutputFormat { get; set; } = "MP4";
+
+    public string ConversionMode { get; set; } = "Remux";
+
+    public string Fps { get; set; } = "30";
+
+    public int WindowWidth { get; set; } = 960;
+
+    public int WindowHeight { get; set; } = 820;
+}

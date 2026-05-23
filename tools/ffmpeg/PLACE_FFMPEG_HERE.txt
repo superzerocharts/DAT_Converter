@@ -1,0 +1,10 @@
+Place ffmpeg.exe and ffprobe.exe in this folder before publishing or distributing DAT Converter.
+
+Required paths:
+
+tools\ffmpeg\ffmpeg.exe
+tools\ffmpeg\ffprobe.exe
+
+Include the FFmpeg license, notice, and attribution files that apply to the exact FFmpeg build you distribute.
+
+DAT Converter does not search the system PATH and does not use globally installed FFmpeg.
