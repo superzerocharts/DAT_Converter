@@ -5,6 +5,7 @@ public sealed class MainForm : Form
     private const int DetailsExpandedHeight = 280;
     private const int DefaultClientWidth = 960;
     private const int DefaultClientHeight = 820;
+    private const int ActionRowHeight = 66;
 
     private const string MissingToolsStatusMessage = "Required FFmpeg tools were not found.";
     private const string MissingToolsExplanationMessage =
@@ -2510,8 +2511,8 @@ public sealed class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 168));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 180));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 66));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, ActionRowHeight));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, ActionRowHeight));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
         detailsRowStyle = new RowStyle(SizeType.Absolute, 0);
