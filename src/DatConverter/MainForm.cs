@@ -4,7 +4,7 @@ public sealed class MainForm : Form
 {
     private const int DetailsExpandedHeight = 280;
     private const int DefaultClientWidth = 960;
-    private const int DefaultClientHeight = 820;
+    private const int DefaultClientHeight = 852;
     private const int ActionRowHeight = 66;
 
     private const string MissingToolsStatusMessage = "Required FFmpeg tools were not found.";
@@ -2097,12 +2097,12 @@ public sealed class MainForm : Form
 
         if (visible != wasVisible)
         {
-            Height += visible ? DetailsExpandedHeight : -DetailsExpandedHeight;
+            ClientSize = new Size(ClientSize.Width, ClientSize.Height + (visible ? DetailsExpandedHeight : -DetailsExpandedHeight));
         }
 
-        detailsPanel?.ResumeLayout(false);
-        rootLayout?.ResumeLayout(false);
-        ResumeLayout(false);
+        detailsPanel?.ResumeLayout(true);
+        rootLayout?.ResumeLayout(true);
+        ResumeLayout(true);
     }
 
     private string BuildDetailsText()
