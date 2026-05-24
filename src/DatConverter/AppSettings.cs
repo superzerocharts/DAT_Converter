@@ -10,7 +10,7 @@ public sealed class AppSettings
 
     public string ConversionMode { get; set; } = "Remux";
 
-    public string Fps { get; set; } = "30";
+    public string Fps { get; set; } = "Auto-detect";
 
     public int WindowWidth { get; set; } = 960;
 

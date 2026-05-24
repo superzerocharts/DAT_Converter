@@ -115,4 +115,49 @@ public sealed class QueueSettingsLockServiceTests
         Assert.Equal("Exists", item.StatusText);
         Assert.Equal("Selected output exists", item.ProgressText);
     }
+
+    [Fact]
+    public void ApplyLockedSettings_AppliesResolvedItemFps()
+    {
+        var item = new QueueItem(
+            @"C:\input\clip.dat",
+            @"C:\old-output\clip.mp4",
+            OutputDestinationMode.SameFolderAsSource,
+            null,
+            OutputFormat.Mp4,
+            "Remux",
+            FpsOption.FromLabel("30"),
+            false);
+        var lockedSettings = new QueueSettingsSnapshot(
+            OutputFormat.Mp4,
+            "Remux",
+            FpsOption.FromLabel("30"),
+            OutputDestinationMode.SameFolderAsSource,
+            null)
+        {
+            FpsSettings = QueueItemFpsSettings.AutoDetect()
+        };
+
+        QueueSettingsLockService.ApplyLockedSettings(
+            item,
+            lockedSettings,
+            @"C:\input",
+            @"C:\input\clip.mp4",
+            hasExistingDirectOutput: false,
+            readyProgressText: "Ready",
+            fpsResolution: new QueueItemFpsResolution
+            {
+                SelectionMode = FpsSelectionMode.AutoDetect,
+                DisplayLabel = "Auto 25",
+                FfmpegRateValue = "25",
+                NominalConversionFps = 25,
+                AutoDetectionSucceeded = true,
+                Confidence = "High"
+            });
+
+        Assert.Equal(FpsSelectionMode.AutoDetect, item.FpsSelectionMode);
+        Assert.Equal("Auto 25", item.FpsDisplayLabel);
+        Assert.Equal("25", item.FfmpegRateValue);
+        Assert.Equal("25", item.Fps.FfmpegValue);
+    }
 }

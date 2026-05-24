@@ -66,6 +66,51 @@ public static class OutputPathService
         return IsSafeOutputPath(inputFilePath, outputPath) ? outputPath : null;
     }
 
+    public static string? PlanUniqueOutputPath(
+        string? inputFilePath,
+        string? outputFolderPath,
+        OutputFormat outputFormat,
+        Func<string, bool> isCandidateAllowed,
+        bool allowExistingDirectOutput = true)
+    {
+        var directOutputPath = GetDirectOutputPath(inputFilePath, outputFolderPath, outputFormat);
+        if (string.IsNullOrWhiteSpace(directOutputPath))
+        {
+            return null;
+        }
+
+        if (isCandidateAllowed(directOutputPath) &&
+            (allowExistingDirectOutput || !File.Exists(directOutputPath)))
+        {
+            return directOutputPath;
+        }
+
+        if (string.IsNullOrWhiteSpace(inputFilePath) || string.IsNullOrWhiteSpace(outputFolderPath))
+        {
+            return null;
+        }
+
+        var inputBaseName = Path.GetFileNameWithoutExtension(inputFilePath);
+        var extension = outputFormat.Extension();
+        if (string.IsNullOrWhiteSpace(inputBaseName) || string.IsNullOrWhiteSpace(extension))
+        {
+            return null;
+        }
+
+        for (var index = 1; index <= 999; index++)
+        {
+            var candidate = Path.Combine(outputFolderPath, $"{inputBaseName}_{index:00}{extension}");
+            if (IsSafeOutputPath(inputFilePath, candidate) &&
+                !File.Exists(candidate) &&
+                isCandidateAllowed(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
     public static CustomOutputPathValidationResult ValidateCustomOutputPath(
         string? inputFilePath,
         string? outputFilePath,

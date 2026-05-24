@@ -24,6 +24,43 @@ public sealed class ProbeServiceIntegrationTests
     }
 
     [Fact]
+    public async Task ProbeRawH264Async_UsesProbeOnlyDefaultWhenFpsIsUnresolved()
+    {
+        var samplePath = Path.Combine(GetRepositoryRoot(), "test-assets", "samples", "dat_5min_sample.dat");
+        Assert.True(File.Exists(samplePath), $"Sample file is missing: {samplePath}");
+        var tools = ToolPathService.ResolveBundledTools();
+        Assert.True(tools.AreAvailable, $"Bundled FFmpeg tools are missing from test output: {tools.FfmpegPath}; {tools.FfprobePath}");
+        var service = new ProbeService(tools);
+
+        var result = await service.ProbeRawH264Async(samplePath, new FpsOption("Needs FPS", ""), CancellationToken.None);
+
+        Assert.True(result.IsSuccess, result.TechnicalDetails);
+        Assert.Equal("h264", result.CodecName, ignoreCase: true);
+        Assert.Equal("30", result.Fps.Label);
+        Assert.Equal("30", result.Fps.FfmpegValue);
+    }
+
+    [Fact]
+    public async Task ProbeRawH264Async_AcceptsCorruptTimestampSampleWhenPresent()
+    {
+        var samplePath = @"W:\Projects\Camera 205 Sample\Camera 205 Sample\dvrfile00000001_corrupt_fps_timestamps.dat";
+        if (!File.Exists(samplePath))
+        {
+            return;
+        }
+
+        var tools = ToolPathService.ResolveBundledTools();
+        Assert.True(tools.AreAvailable, $"Bundled FFmpeg tools are missing from test output: {tools.FfmpegPath}; {tools.FfprobePath}");
+        var service = new ProbeService(tools);
+
+        var result = await service.ProbeRawH264Async(samplePath, new FpsOption("Needs FPS", ""), CancellationToken.None);
+
+        Assert.True(result.IsSuccess, result.TechnicalDetails);
+        Assert.Equal("h264", result.CodecName, ignoreCase: true);
+        Assert.Equal("30", result.Fps.FfmpegValue);
+    }
+
+    [Fact]
     public async Task ProbeRawH264Async_RejectsInvalidDatWithUnsupportedMessage()
     {
         using var temp = new TempDirectory();

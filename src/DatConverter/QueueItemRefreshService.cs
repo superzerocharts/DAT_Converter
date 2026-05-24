@@ -7,18 +7,30 @@ public static class QueueItemRefreshService
         QueueSettingsSnapshot settings,
         Func<QueueItem, QueueSettingsSnapshot, string?> resolveOutputFolder,
         Func<QueueItem, string, OutputFormat, string?> planOutputPath,
-        Func<QueueItem, string, OutputFormat, string?> getDirectOutputPath)
+        Func<QueueItem, string, OutputFormat, string?> getDirectOutputPath,
+        Func<QueueItem, QueueSettingsSnapshot, QueueItemFpsResolution>? resolveFps = null)
     {
         var refreshed = 0;
         var invalid = 0;
 
         foreach (var item in items.Where(CanRefreshFromLiveSettings))
         {
-            var outputFolderPath = resolveOutputFolder(item, settings);
+            var itemOutputFormat = item.HasCustomFormat ? item.OutputFormat : settings.OutputFormat;
+            var itemConversionMode = item.HasCustomMode ? item.ConversionMode : settings.ConversionMode;
+            var itemFpsSettings = item.HasCustomFpsSetting ? item.FpsSettings : settings.FpsSettings;
+            var itemSettings = settings with
+            {
+                OutputFormat = itemOutputFormat,
+                ConversionMode = itemConversionMode,
+                Fps = itemFpsSettings.ToManualFpsOption(),
+                FpsSettings = itemFpsSettings
+            };
+
+            var outputFolderPath = resolveOutputFolder(item, itemSettings);
             var outputFolderValidation = OutputFolderValidator.ValidateOutputFolder(outputFolderPath);
             if (!outputFolderValidation.IsValid || string.IsNullOrWhiteSpace(outputFolderValidation.FolderPath))
             {
-                ApplySettings(item, settings, null, null, hasExistingDirectOutput: false);
+                ApplySettings(item, itemSettings, null, null, hasExistingDirectOutput: false, ResolveFps(item, itemSettings, resolveFps));
                 item.Status = QueueItemStatus.Invalid;
                 item.StatusText = "Output invalid";
                 item.ProgressText = outputFolderValidation.Message;
@@ -27,12 +39,15 @@ public static class QueueItemRefreshService
                 continue;
             }
 
-            var directOutputPath = getDirectOutputPath(item, outputFolderValidation.FolderPath, settings.OutputFormat);
+            var directOutputPath = getDirectOutputPath(item, outputFolderValidation.FolderPath, itemSettings.OutputFormat);
             var hasExistingDirectOutput = !string.IsNullOrWhiteSpace(directOutputPath) && File.Exists(directOutputPath);
-            var plannedOutputPath = planOutputPath(item, outputFolderValidation.FolderPath, settings.OutputFormat);
+            var plannedOutputPath = planOutputPath(item, outputFolderValidation.FolderPath, itemSettings.OutputFormat);
+            var hasExistingPlannedOutput = hasExistingDirectOutput &&
+                                           !string.IsNullOrWhiteSpace(plannedOutputPath) &&
+                                           string.Equals(directOutputPath, plannedOutputPath, StringComparison.OrdinalIgnoreCase);
             if (string.IsNullOrWhiteSpace(plannedOutputPath))
             {
-                ApplySettings(item, settings, outputFolderValidation.FolderPath, null, hasExistingDirectOutput);
+                ApplySettings(item, itemSettings, outputFolderValidation.FolderPath, null, hasExistingDirectOutput, ResolveFps(item, itemSettings, resolveFps));
                 item.Status = QueueItemStatus.Invalid;
                 item.StatusText = "No output";
                 item.ProgressText = "No safe output path";
@@ -41,28 +56,42 @@ public static class QueueItemRefreshService
                 continue;
             }
 
+            var fpsResolution = ResolveFps(item, itemSettings, resolveFps);
             var wasProbeValidForSettings =
                 item.PreProbeResult?.IsSuccess == true &&
-                string.Equals(item.Fps.Label, settings.Fps.Label, StringComparison.Ordinal) &&
-                string.Equals(item.Fps.FfmpegValue, settings.Fps.FfmpegValue, StringComparison.Ordinal);
+                string.Equals(item.Fps.FfmpegValue, fpsResolution.FfmpegRateValue, StringComparison.Ordinal);
             var readyProgressText = wasProbeValidForSettings && item.PreProbeResult is not null
                 ? FormatProbeProgressText(item.PreProbeResult)
-                : "Waiting for probe";
+                : QueueItemStatusText.CheckingFile;
 
-            ApplySettings(item, settings, outputFolderValidation.FolderPath, plannedOutputPath, hasExistingDirectOutput);
+            ApplySettings(item, itemSettings, outputFolderValidation.FolderPath, plannedOutputPath, hasExistingPlannedOutput, fpsResolution);
+
+            if (hasExistingPlannedOutput)
+            {
+                item.Status = QueueItemStatus.Skipped;
+                item.StatusText = "Exists";
+                item.ProgressText = "Selected output exists";
+                item.ResultStatusSummary = "Skipped - output already exists";
+                refreshed++;
+                continue;
+            }
+
+            if (!fpsResolution.HasResolvedFps)
+            {
+                item.PreProbeResult = null;
+                item.Status = QueueItemStatus.Warning;
+                item.StatusText = "Needs FPS";
+                item.ProgressText = "Choose Source FPS";
+                refreshed++;
+                continue;
+            }
 
             if (!wasProbeValidForSettings)
             {
                 item.PreProbeResult = null;
                 item.Status = QueueItemStatus.WaitingForProbe;
-                item.StatusText = "Waiting for probe";
+                item.StatusText = QueueItemStatusText.CheckingFile;
                 item.ProgressText = "";
-            }
-            else if (hasExistingDirectOutput)
-            {
-                item.Status = QueueItemStatus.Skipped;
-                item.StatusText = "Exists";
-                item.ProgressText = "Selected output exists";
             }
             else
             {
@@ -92,7 +121,8 @@ public static class QueueItemRefreshService
         QueueSettingsSnapshot settings,
         string? outputFolderPath,
         string? plannedOutputPath,
-        bool hasExistingDirectOutput)
+        bool hasExistingDirectOutput,
+        QueueItemFpsResolution fpsResolution)
     {
         if (!string.IsNullOrWhiteSpace(plannedOutputPath))
         {
@@ -105,8 +135,17 @@ public static class QueueItemRefreshService
             : null;
         item.OutputFormat = settings.OutputFormat;
         item.ConversionMode = settings.ConversionMode;
-        item.Fps = settings.Fps;
+        item.ApplyFpsResolution(settings.FpsSettings, fpsResolution);
         item.HasExistingDirectOutput = hasExistingDirectOutput;
+    }
+
+    private static QueueItemFpsResolution ResolveFps(
+        QueueItem item,
+        QueueSettingsSnapshot settings,
+        Func<QueueItem, QueueSettingsSnapshot, QueueItemFpsResolution>? resolveFps)
+    {
+        return resolveFps?.Invoke(item, settings)
+            ?? QueueItemFpsResolution.FromManual(settings.FpsSettings.ToManualFpsOption());
     }
 
     private static string FormatProbeProgressText(ProbeResult probeResult)

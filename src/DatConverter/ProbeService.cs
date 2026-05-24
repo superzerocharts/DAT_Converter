@@ -15,11 +15,14 @@ public sealed class ProbeService
 
     public async Task<ProbeResult> ProbeRawH264Async(string inputFilePath, FpsOption fps, CancellationToken cancellationToken)
     {
+        var probeFps = string.IsNullOrWhiteSpace(fps.FfmpegValue)
+            ? FpsOption.FromLabel("30")
+            : fps;
         var ffprobeArguments = new[]
         {
             "-v", "error",
             "-f", "h264",
-            "-framerate", fps.FfmpegValue,
+            "-framerate", probeFps.FfmpegValue,
             "-i", inputFilePath,
             "-select_streams", "v:0",
             "-show_entries", "stream=codec_name,profile,width,height,pix_fmt,r_frame_rate,avg_frame_rate,duration",
@@ -30,19 +33,19 @@ public sealed class ProbeService
         var ffprobeResult = await FfmpegProcessRunner.RunAsync(ffmpegTools.FfprobePath, ffprobeArguments, ProbeTimeout, cancellationToken);
         if (ffprobeResult.WasCanceled)
         {
-            return CreateFailure(ffmpegTools.FfprobePath, fps, "Probe was canceled.");
+            return CreateFailure(ffmpegTools.FfprobePath, probeFps, "Probe was canceled.");
         }
 
         if (ffprobeResult.ExitCode == 0)
         {
-            var parsedResult = TryParseFfprobeJson(ffprobeResult.StandardOutput, ffmpegTools.FfprobePath, fps, ffprobeResult.StandardError);
+            var parsedResult = TryParseFfprobeJson(ffprobeResult.StandardOutput, ffmpegTools.FfprobePath, probeFps, ffprobeResult.StandardError);
             if (parsedResult.IsSuccess)
             {
                 return parsedResult;
             }
         }
 
-        var ffmpegFallbackResult = await RunShortFfmpegValidationAsync(inputFilePath, fps, cancellationToken);
+        var ffmpegFallbackResult = await RunShortFfmpegValidationAsync(inputFilePath, probeFps, cancellationToken);
         if (ffmpegFallbackResult.IsSuccess)
         {
             return ffmpegFallbackResult;
@@ -50,7 +53,7 @@ public sealed class ProbeService
 
         return CreateFailure(
             ffmpegTools.FfprobePath,
-            fps,
+            probeFps,
             BuildTechnicalDetails("ffprobe", ffprobeResult, "ffmpeg fallback", ffmpegFallbackResult.TechnicalDetails));
     }
 

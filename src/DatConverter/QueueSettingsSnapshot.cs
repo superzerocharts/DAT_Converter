@@ -5,4 +5,7 @@ public sealed record QueueSettingsSnapshot(
     string ConversionMode,
     FpsOption Fps,
     OutputDestinationMode OutputDestinationMode,
-    string? ChosenOutputFolder);
+    string? ChosenOutputFolder)
+{
+    public QueueItemFpsSettings FpsSettings { get; init; } = QueueItemFpsSettings.FromManual(Fps);
+}

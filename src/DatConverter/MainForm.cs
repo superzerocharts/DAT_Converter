@@ -20,8 +20,7 @@ public sealed class MainForm : Form
     private const string MissingToolsDetailsMessage =
         MissingToolsStatusMessage + "\r\n" +
         MissingToolsExplanationMessage;
-    private const string AddWhileRunningWarningMessage =
-        "Files added while the queue is running will use the current queue settings.";
+    private const string AutoDetectFpsLabel = SourceFpsOptions.AutoDetectLabel;
 
     private readonly TextBox selectedFilePathTextBox;
     private readonly Button browseFileButton;
@@ -29,6 +28,7 @@ public sealed class MainForm : Form
     private readonly DataGridView queueGridView;
     private readonly Button startQueueButton;
     private readonly Button stopAfterCurrentButton;
+    private readonly Button cancelQueueButton;
     private readonly Button removeSelectedQueueItemButton;
     private readonly Button clearCompletedQueueButton;
     private readonly RadioButton sameFolderRadioButton;
@@ -45,14 +45,17 @@ public sealed class MainForm : Form
     private readonly Button showDetailsButton;
     private readonly RichTextBox statusLogTextBox;
     private readonly Button openOutputFolderButton;
+    private readonly Button wordWrapButton;
     private readonly Button copyLogButton;
     private readonly Button clearLogButton;
     private readonly FfmpegTools ffmpegTools;
     private readonly ProbeService probeService;
     private readonly ConversionService conversionService;
+    private readonly QueueItemFpsResolver queueItemFpsResolver = new();
     private readonly AppSettingsService appSettingsService;
     private readonly AppSettings appSettings;
     private readonly TechnicalLogBuffer technicalLog = new();
+    private readonly System.Diagnostics.Stopwatch startupStopwatch = System.Diagnostics.Stopwatch.StartNew();
     private readonly FileSelectionState selectionState = new();
     private readonly List<QueueItem> queueItems = new();
     private CancellationTokenSource? probeCancellationTokenSource;
@@ -61,12 +64,17 @@ public sealed class MainForm : Form
     private bool isQueueProcessing;
     private bool isQueuePreProbeRunning;
     private bool stopAfterCurrentRequested;
+    private bool cancelCurrentOnlyRequested;
+    private bool cancelQueueRequested;
     private bool areDetailsVisible;
     private TableLayoutPanel? rootLayout;
     private RowStyle? detailsRowStyle;
     private Control? detailsPanel;
+    private PictureBox? headerLogoPictureBox;
     private QueueItem? currentQueueItem;
     private QueueSettingsSnapshot? activeQueueSettings;
+    private QueueSettingsSnapshot? lastQueueRunSettings;
+    private string lastQueueRunStatus = "Not run";
     private string? lastSuccessfulOutputPath;
     private ConversionResult? lastConversionResult;
     private CancellationTokenSource? conversionCancellationTokenSource;
@@ -79,6 +87,38 @@ public sealed class MainForm : Form
     private bool isInitializing;
     private bool queueColumnsUserResized;
     private bool isApplyingQueueColumnWidths;
+    private bool isRefreshingQueueGrid;
+    private int pendingRunningQueueAddOperations;
+    private bool deferredStartupCompleted;
+
+    private enum DetailsScrollMode
+    {
+        Preserve,
+        Bottom
+    }
+
+    private const int EmGetScrollPos = 0x04DD;
+    private const int EmSetScrollPos = 0x04DE;
+    private const int WmSetRedraw = 0x000B;
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct NativePoint
+    {
+        public NativePoint(int x, int y)
+        {
+            X = x;
+            Y = y;
+        }
+
+        public int X;
+        public int Y;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, ref NativePoint lParam);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
     public MainForm()
     {
@@ -118,6 +158,8 @@ public sealed class MainForm : Form
         startQueueButton.Size = new Size(160, 42);
         stopAfterCurrentButton = CreateButton("Stop After Current");
         stopAfterCurrentButton.Size = new Size(230, 42);
+        cancelQueueButton = CreateButton("Cancel Queue");
+        cancelQueueButton.Size = new Size(180, 42);
         removeSelectedQueueItemButton = CreateButton("Clear All");
         removeSelectedQueueItemButton.Size = new Size(216, 42);
         clearCompletedQueueButton = CreateButton("Clear Completed");
@@ -140,7 +182,7 @@ public sealed class MainForm : Form
         browseOutputFolderButton = CreateButton("Browse...");
         outputFormatComboBox = CreateComboBox(new[] { "MP4", "MKV" }, appSettings.OutputFormat);
         conversionModeComboBox = CreateComboBox(new[] { "Fast", "Full" }, FormatConversionModeForDisplay(appSettings.ConversionMode));
-        frameRateComboBox = CreateComboBox(new[] { "15", "20", "24", "25", "29.97", "30" }, appSettings.Fps);
+        frameRateComboBox = CreateComboBox(SourceFpsOptions.DisplayOrder, appSettings.Fps);
         convertButton = CreateButton("Convert");
         cancelButton = CreateButton("Cancel Current");
         cancelButton.Size = new Size(190, 42);
@@ -167,8 +209,9 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ReadOnly = true,
-            ScrollBars = RichTextBoxScrollBars.Vertical,
+            ScrollBars = RichTextBoxScrollBars.Both,
             Text = currentUserStatus,
+            WordWrap = false,
             BackColor = SystemColors.Window,
             BorderStyle = BorderStyle.Fixed3D,
             DetectUrls = false
@@ -179,6 +222,8 @@ public sealed class MainForm : Form
         openOutputFolderButton.ImageAlign = ContentAlignment.MiddleCenter;
         openOutputFolderButton.TextImageRelation = TextImageRelation.Overlay;
         openOutputFolderButton.Padding = Padding.Empty;
+        wordWrapButton = CreateButton("Word Wrap: Off");
+        wordWrapButton.Size = new Size(150, 42);
         copyLogButton = CreateButton("Copy Log");
         clearLogButton = CreateButton("Clear Log");
 
@@ -186,10 +231,11 @@ public sealed class MainForm : Form
         convertButton.Visible = false;
         cancelButton.Enabled = false;
         openOutputFolderButton.Enabled = false;
-        copyLogButton.Visible = false;
-        clearLogButton.Visible = false;
+        copyLogButton.Visible = true;
+        clearLogButton.Visible = true;
         startQueueButton.Enabled = false;
         stopAfterCurrentButton.Enabled = false;
+        cancelQueueButton.Enabled = false;
         removeSelectedQueueItemButton.Enabled = false;
         clearCompletedQueueButton.Enabled = false;
         browseFileButton.Enabled = ffmpegTools.AreAvailable;
@@ -202,6 +248,7 @@ public sealed class MainForm : Form
         queueGridView.Resize += QueueGridView_Resize;
         startQueueButton.Click += StartQueueButton_Click;
         stopAfterCurrentButton.Click += StopAfterCurrentButton_Click;
+        cancelQueueButton.Click += CancelQueueButton_Click;
         removeSelectedQueueItemButton.Click += RemoveSelectedQueueItemButton_Click;
         clearCompletedQueueButton.Click += ClearCompletedQueueButton_Click;
         sameFolderRadioButton.CheckedChanged += OutputDestinationRadioButton_CheckedChanged;
@@ -214,6 +261,7 @@ public sealed class MainForm : Form
         cancelButton.Click += CancelButton_Click;
         openOutputFolderButton.Click += OpenOutputFolderButton_Click;
         showDetailsButton.Click += ShowDetailsButton_Click;
+        wordWrapButton.Click += WordWrapButton_Click;
         copyLogButton.Click += CopyLogButton_Click;
         clearLogButton.Click += ClearLogButton_Click;
         ResizeEnd += MainForm_ResizeEnd;
@@ -224,7 +272,6 @@ public sealed class MainForm : Form
         technicalLog.Append($"Output destination mode: {FormatOutputDestinationMode(selectionState.OutputDestinationMode)}.");
         isInitializing = false;
         ApplyOutputDestinationMode();
-        ApplyQueueAutoFitColumnWidths();
         ApplyStartupToolValidation();
     }
 
@@ -284,9 +331,18 @@ public sealed class MainForm : Form
         }
     }
 
-    private void BrowseFileButton_Click(object? sender, EventArgs e)
+    private async void BrowseFileButton_Click(object? sender, EventArgs e)
     {
-        ShowAddWhileRunningWarningIfNeeded();
+        if (!TryPrepareForQueueAdd())
+        {
+            return;
+        }
+
+        var addingToRunningQueue = isQueueProcessing;
+        if (addingToRunningQueue)
+        {
+            pendingRunningQueueAddOperations++;
+        }
 
         using var dialog = new OpenFileDialog
         {
@@ -297,17 +353,38 @@ public sealed class MainForm : Form
             CheckPathExists = true
         };
 
-        if (dialog.ShowDialog(this) != DialogResult.OK)
+        try
         {
-            return;
-        }
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+            {
+                return;
+            }
 
-        AddFilesToQueue(dialog.FileNames);
+            await AddFilesToQueueAsync(dialog.FileNames, addingToRunningQueue);
+        }
+        finally
+        {
+            if (addingToRunningQueue)
+            {
+                pendingRunningQueueAddOperations--;
+            }
+        }
     }
 
     private async void AddFolderButton_Click(object? sender, EventArgs e)
     {
-        ShowAddWhileRunningWarningIfNeeded();
+        if (isQueueProcessing)
+        {
+            const string message = "Add Folder is unavailable while the queue is running.";
+            RefreshStatusLog(message);
+            MessageBox.Show(this, message, "Add Folder", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        if (!TryPrepareForQueueAdd())
+        {
+            return;
+        }
 
         using var dialog = new FolderBrowserDialog
         {
@@ -429,7 +506,7 @@ public sealed class MainForm : Form
         }
         finally
         {
-            addFolderButton.Enabled = ffmpegTools.AreAvailable && (!isConversionRunning || isQueueProcessing);
+            addFolderButton.Enabled = ffmpegTools.AreAvailable && !isConversionRunning && !isQueueProcessing;
         }
 
         foreach (var error in scanResult.Errors)
@@ -455,7 +532,7 @@ public sealed class MainForm : Form
 
         var addSettings = GetQueueAddSettings();
         var preview = CreateFolderQueueAddPreview(scanResult.DatFiles, addSettings);
-        technicalLog.Append($"Folder scan completed. Folder: {folderPath}; Include subfolders: {FormatYesNo(includeSubfolders)}; Found: {scanResult.DatFiles.Count}; Selected-format outputs already present: {preview.AlreadyConvertedSkippedCount}; Duplicates: {preview.DuplicateCount}; Invalid: {preview.InvalidCount}; Output plan failures: {preview.OutputPlanFailedCount}; Will add: {preview.AddablePaths.Count}; Skipped/inaccessible folders: {scanResult.SkippedPaths.Count}.");
+        technicalLog.Append($"Folder scan completed. Folder: {folderPath}; Include subfolders: {FormatYesNo(includeSubfolders)}; Found: {scanResult.DatFiles.Count}; Selected-format outputs already present: {preview.AlreadyConvertedSkippedCount}; Invalid: {preview.InvalidCount}; Output plan failures: {preview.OutputPlanFailedCount}; Will add: {preview.AddablePaths.Count}; Skipped/inaccessible folders: {scanResult.SkippedPaths.Count}.");
 
         var availableSlots = 100 - queueItems.Count;
         if (preview.AddablePaths.Count > availableSlots)
@@ -471,7 +548,6 @@ public sealed class MainForm : Form
             var noAddMessage =
                 $"Found {scanResult.DatFiles.Count} .dat file{(scanResult.DatFiles.Count == 1 ? "" : "s")}, but none can be added.\r\n\r\n" +
                 $"Selected output format already exists: {preview.AlreadyConvertedSkippedCount}\r\n" +
-                $"Duplicates already in queue: {preview.DuplicateCount}\r\n" +
                 $"Invalid/skipped: {preview.InvalidCount + preview.OutputPlanFailedCount}";
 
             RefreshStatusLog("No files were added to the queue.");
@@ -488,7 +564,7 @@ public sealed class MainForm : Form
             return;
         }
 
-        AddFilesToQueue(preview.AddablePaths);
+        await AddFilesToQueueAsync(preview.AddablePaths);
     }
 
     private DialogResult ShowFolderQueuePreviewDialog(int foundCount, FolderQueueAddPreview preview, QueueSettingsSnapshot addSettings)
@@ -527,7 +603,6 @@ public sealed class MainForm : Form
             Text =
                 $"Found {foundCount} .dat file{(foundCount == 1 ? "" : "s")}.\r\n" +
                 $"Selected output format already exists: {preview.AlreadyConvertedSkippedCount}\r\n" +
-                $"Duplicates already in queue: {preview.DuplicateCount}\r\n" +
                 $"Invalid/skipped: {preview.InvalidCount + preview.OutputPlanFailedCount}\r\n" +
                 $"Will add: {preview.AddablePaths.Count}\r\n\r\n" +
                 "Add these files to the queue?",
@@ -592,11 +667,17 @@ public sealed class MainForm : Form
     private void QueueGridView_SelectionChanged(object? sender, EventArgs e)
     {
         UpdateQueueButtonState();
+        RefreshDetailsText(DetailsScrollMode.Preserve);
+    }
+
+    private void OutsideQueueControl_MouseDown(object? sender, MouseEventArgs e)
+    {
+        ClearQueueSelection();
     }
 
     private void QueueGridView_ColumnWidthChanged(object? sender, DataGridViewColumnEventArgs e)
     {
-        if (isApplyingQueueColumnWidths || isInitializing)
+        if (isApplyingQueueColumnWidths || isInitializing || isRefreshingQueueGrid)
         {
             return;
         }
@@ -621,31 +702,33 @@ public sealed class MainForm : Form
             return;
         }
 
-        if (!CanEditQueueItemSaveAs(item))
+        if (!CanEditQueueItem(item))
         {
-            RefreshStatusLog("Only Ready or Exists queue items can be renamed.");
+            const string message = "This item cannot be changed after conversion has started.";
+            RefreshStatusLog(message);
+            MessageBox.Show(this, message, "Edit Queue Item", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
-        ShowSaveAsEditor(item);
+        ShowQueueItemEditor(item);
     }
 
-    private static bool CanEditQueueItemSaveAs(QueueItem item)
+    private static bool CanEditQueueItem(QueueItem item)
     {
-        return item.Status is QueueItemStatus.Ready or QueueItemStatus.Skipped;
+        return QueueItemRefreshService.CanRefreshFromLiveSettings(item);
     }
 
-    private void ShowSaveAsEditor(QueueItem item)
+    private bool ShowQueueItemEditor(QueueItem item, bool resolveAutoDetectInDialog = false)
     {
         using var dialog = new Form
         {
-            Text = "Save As",
+            Text = "Edit Queue Item",
             StartPosition = FormStartPosition.CenterParent,
             FormBorderStyle = FormBorderStyle.FixedDialog,
             MinimizeBox = false,
             MaximizeBox = false,
             ShowInTaskbar = false,
-            ClientSize = new Size(820, 150),
+            ClientSize = new Size(820, 356),
             Font = Font
         };
 
@@ -654,12 +737,16 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             Padding = new Padding(16),
             ColumnCount = 3,
-            RowCount = 2
+            RowCount = 6
         };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 82));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 122));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
 
         var saveAsTextBox = new TextBox
@@ -670,6 +757,17 @@ public sealed class MainForm : Form
         };
         var browseButton = CreateButton("Browse...");
         browseButton.Margin = new Padding(0, 6, 0, 6);
+        var formatComboBox = CreateComboBox(new[] { "MP4", "MKV" }, item.OutputFormat.DisplayName());
+        var modeComboBox = CreateComboBox(new[] { "Fast", "Full" }, FormatConversionModeForDisplay(item.ConversionMode));
+        var fpsComboBox = CreateComboBox(SourceFpsOptions.DisplayOrder, FormatFpsSettingForEditor(item.FpsSettings));
+        var fpsMessageLabel = new Label
+        {
+            AutoSize = false,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = SystemColors.GrayText,
+            Margin = new Padding(0, 0, 0, 4)
+        };
         var buttonPanel = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
@@ -677,35 +775,100 @@ public sealed class MainForm : Form
             WrapContents = false,
             Margin = new Padding(0)
         };
-        var applyButton = CreateButton("Apply");
+        var applyButton = CreateButton("OK");
         var cancelDialogButton = CreateButton("Cancel");
         cancelDialogButton.DialogResult = DialogResult.Cancel;
-        var resetButton = CreateButton("Reset");
+        var resetButton = CreateButton("Reset to Defaults");
+        resetButton.Size = new Size(174, 42);
+        resetButton.TextAlign = ContentAlignment.MiddleCenter;
+        var isDetectingFps = false;
+
+        void SetApplyAvailability()
+        {
+            applyButton.Enabled = !isDetectingFps;
+        }
+
+        void DisableAutoDetectForManualSelection()
+        {
+            if (fpsComboBox.Items.Contains(AutoDetectFpsLabel))
+            {
+                fpsComboBox.Items.Remove(AutoDetectFpsLabel);
+            }
+
+            fpsComboBox.SelectedItem = "30";
+            if (fpsComboBox.SelectedIndex < 0)
+            {
+                fpsComboBox.Text = "30";
+            }
+        }
+
+        async Task ResolveAutoDetectForDialogAsync()
+        {
+            isDetectingFps = true;
+            fpsComboBox.Enabled = false;
+            fpsMessageLabel.ForeColor = SystemColors.GrayText;
+            fpsMessageLabel.Text = "Detecting source frame rate...";
+            SetApplyAvailability();
+
+            var settings = QueueItemFpsSettings.AutoDetect();
+            var resolution = await Task.Run(() => queueItemFpsResolver.ResolveQueueItemFps(item.InputPath, settings));
+            if (dialog.IsDisposed)
+            {
+                return;
+            }
+
+            item.ApplyFpsResolution(settings, resolution);
+            isDetectingFps = false;
+            fpsComboBox.Enabled = true;
+
+            if (resolution.HasResolvedFps && !resolution.RequiresManualFpsSelection)
+            {
+                fpsComboBox.SelectedItem = AutoDetectFpsLabel;
+                fpsMessageLabel.ForeColor = SystemColors.GrayText;
+                fpsMessageLabel.Text = $"Detected source frame rate: {resolution.DisplayLabel}.";
+            }
+            else
+            {
+                DisableAutoDetectForManualSelection();
+                fpsMessageLabel.ForeColor = Color.FromArgb(160, 92, 0);
+                fpsMessageLabel.Text = "Unable to detect source frame rate. Please select manually.";
+            }
+
+            SetApplyAvailability();
+        }
 
         browseButton.Click += (_, _) =>
         {
-            using var saveDialog = CreateSaveAsDialog(item, saveAsTextBox.Text);
+            using var saveDialog = CreateSaveAsDialog(item, saveAsTextBox.Text, ParseOutputFormatDisplay(formatComboBox.SelectedItem?.ToString()));
             if (saveDialog.ShowDialog(dialog) == DialogResult.OK)
             {
                 saveAsTextBox.Text = saveDialog.FileName;
             }
         };
 
-        applyButton.Click += (_, _) =>
+        applyButton.Click += async (_, _) =>
         {
-            if (TryApplyCustomSaveAsPath(item, saveAsTextBox.Text, dialog))
+            if (TryApplyQueueItemEdits(
+                    item,
+                    saveAsTextBox.Text,
+                    ParseOutputFormatDisplay(formatComboBox.SelectedItem?.ToString()),
+                    ParseConversionModeDisplay(modeComboBox.SelectedItem?.ToString()),
+                    BuildFpsSettingsFromDisplay(fpsComboBox.SelectedItem?.ToString()),
+                    dialog))
             {
                 dialog.DialogResult = DialogResult.OK;
                 dialog.Close();
+                await PreProbeWaitingQueueItemsIfIdleAsync();
             }
         };
 
-        resetButton.Click += (_, _) =>
+        resetButton.Click += async (_, _) =>
         {
-            if (TryResetQueueItemOutputPath(item, dialog))
+            if (TryResetQueueItemToQueueDefaults(item, dialog))
             {
                 dialog.DialogResult = DialogResult.OK;
                 dialog.Close();
+                await PreProbeWaitingQueueItemsIfIdleAsync();
             }
         };
 
@@ -716,18 +879,47 @@ public sealed class MainForm : Form
         root.Controls.Add(CreateLabel("Save As:"), 0, 0);
         root.Controls.Add(saveAsTextBox, 1, 0);
         root.Controls.Add(browseButton, 2, 0);
-        root.Controls.Add(buttonPanel, 0, 1);
+        root.Controls.Add(CreateLabel("Output format:"), 0, 1);
+        root.Controls.Add(formatComboBox, 1, 1);
+        root.SetColumnSpan(formatComboBox, 2);
+        root.Controls.Add(CreateLabel("Mode:"), 0, 2);
+        root.Controls.Add(modeComboBox, 1, 2);
+        root.SetColumnSpan(modeComboBox, 2);
+        root.Controls.Add(CreateLabel("Source FPS:"), 0, 3);
+        root.Controls.Add(fpsComboBox, 1, 3);
+        root.SetColumnSpan(fpsComboBox, 2);
+        root.Controls.Add(fpsMessageLabel, 1, 4);
+        root.SetColumnSpan(fpsMessageLabel, 2);
+        root.Controls.Add(buttonPanel, 0, 5);
         root.SetColumnSpan(buttonPanel, 3);
 
         dialog.Controls.Add(root);
         dialog.AcceptButton = applyButton;
         dialog.CancelButton = cancelDialogButton;
-        dialog.ShowDialog(this);
+        if (resolveAutoDetectInDialog)
+        {
+            dialog.Shown += async (_, _) => await ResolveAutoDetectForDialogAsync();
+        }
+        else if (item.FpsSettings.SelectionMode == FpsSelectionMode.AutoDetect &&
+                 (item.RequiresManualFpsSelection || !item.HasResolvedFps))
+        {
+            DisableAutoDetectForManualSelection();
+            fpsMessageLabel.ForeColor = Color.FromArgb(160, 92, 0);
+            fpsMessageLabel.Text = "Unable to detect source frame rate. Please select manually.";
+        }
+
+        SetApplyAvailability();
+        return dialog.ShowDialog(this) == DialogResult.OK;
     }
 
     private SaveFileDialog CreateSaveAsDialog(QueueItem item, string currentOutputPath)
     {
-        var extension = item.OutputFormat.Extension();
+        return CreateSaveAsDialog(item, currentOutputPath, item.OutputFormat);
+    }
+
+    private SaveFileDialog CreateSaveAsDialog(QueueItem item, string currentOutputPath, OutputFormat outputFormat)
+    {
+        var extension = outputFormat.Extension();
         var extensionWithoutDot = extension.TrimStart('.');
         var dialog = new SaveFileDialog
         {
@@ -735,7 +927,7 @@ public sealed class MainForm : Form
             AddExtension = true,
             CheckPathExists = true,
             DefaultExt = extensionWithoutDot,
-            Filter = $"{item.OutputFormat.DisplayName()} files (*{extension})|*{extension}|All files (*.*)|*.*",
+            Filter = $"{outputFormat.DisplayName()} files (*{extension})|*{extension}|All files (*.*)|*.*",
             OverwritePrompt = false
         };
 
@@ -777,14 +969,162 @@ public sealed class MainForm : Form
         }
 
         item.CustomOutputPath = validation.OutputPath;
+        item.HasCustomOutputPath = true;
         item.PlannedOutputPath = validation.OutputPath;
+        item.ConversionResult = null;
+        item.ResultStatusSummary = null;
         item.HasExistingDirectOutput = false;
-        item.Status = QueueItemStatus.Ready;
-        item.StatusText = "Ready";
-        item.ProgressText = item.PreProbeResult is null ? "Ready" : FormatProbeProgressText(item.PreProbeResult);
+        if (item.HasExistingDirectOutput)
+        {
+            item.Status = QueueItemStatus.Skipped;
+            item.StatusText = "Exists";
+            item.ProgressText = "Selected output exists";
+        }
+        else if (item.RequiresManualFpsSelection || !item.HasResolvedFps)
+        {
+            item.PreProbeResult = null;
+            item.Status = QueueItemStatus.Warning;
+            item.StatusText = "Needs FPS";
+            item.ProgressText = "Choose Source FPS";
+        }
+        else
+        {
+            item.Status = QueueItemStatus.Ready;
+            item.StatusText = "Ready";
+            item.ProgressText = item.PreProbeResult is null ? "Ready" : FormatProbeProgressText(item.PreProbeResult);
+        }
         technicalLog.Append($"Queue item Save As applied. Input: {item.InputPath}; Output: {item.PlannedOutputPath}");
         RefreshQueueGrid();
         RefreshStatusLog("Save As path updated for the selected queue item.");
+        UpdateQueueButtonState();
+        return true;
+    }
+
+    private bool TryApplyQueueItemEdits(
+        QueueItem item,
+        string requestedOutputPath,
+        OutputFormat outputFormat,
+        string conversionMode,
+        QueueItemFpsSettings fpsSettings,
+        IWin32Window owner)
+    {
+        var outputPathChanged = !string.Equals(requestedOutputPath?.Trim(), item.PlannedOutputPath, StringComparison.OrdinalIgnoreCase);
+        var formatChanged = outputFormat != item.OutputFormat;
+        var modeChanged = !string.Equals(conversionMode, item.ConversionMode, StringComparison.OrdinalIgnoreCase);
+        var fpsChanged = !AreFpsSettingsEquivalent(fpsSettings, item.FpsSettings);
+
+        string? plannedOutputPath;
+        string? customOutputPath;
+        var hasCustomOutputPath = item.HasCustomOutputPath || !string.IsNullOrWhiteSpace(item.CustomOutputPath);
+
+        if (outputPathChanged || hasCustomOutputPath)
+        {
+            var pathToValidate = outputPathChanged ? requestedOutputPath : item.CustomOutputPath ?? item.PlannedOutputPath;
+            var validation = OutputPathService.ValidateCustomOutputPath(
+                item.InputPath,
+                pathToValidate,
+                outputFormat,
+                requireAvailable: outputPathChanged,
+                allowExtensionCorrection: true);
+            if (!validation.IsValid || string.IsNullOrWhiteSpace(validation.OutputPath))
+            {
+                RefreshStatusLog(validation.Message);
+                MessageBox.Show(owner, validation.Message, "Edit Queue Item", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+
+            if (!IsAvailableQueueOutputPath(validation.OutputPath, item))
+            {
+                const string message = "Save As path is already used by another queued item.";
+                RefreshStatusLog(message);
+                MessageBox.Show(owner, message, "Edit Queue Item", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+
+            plannedOutputPath = validation.OutputPath;
+            customOutputPath = validation.OutputPath;
+            hasCustomOutputPath = true;
+        }
+        else
+        {
+            var outputFolderPath = item.OutputDestinationMode == OutputDestinationMode.SameFolderAsSource
+                ? Path.GetDirectoryName(item.InputPath)
+                : item.SelectedOutputFolder;
+            var outputFolderValidation = OutputFolderValidator.ValidateOutputFolder(outputFolderPath);
+            if (!outputFolderValidation.IsValid || string.IsNullOrWhiteSpace(outputFolderValidation.FolderPath))
+            {
+                RefreshStatusLog(outputFolderValidation.Message);
+                MessageBox.Show(owner, outputFolderValidation.Message, "Edit Queue Item", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+
+            plannedOutputPath = PlanQueueOutputPath(item.InputPath, outputFolderValidation.FolderPath, outputFormat, item);
+            if (string.IsNullOrWhiteSpace(plannedOutputPath))
+            {
+                const string message = "No safe automatic output path could be planned.";
+                RefreshStatusLog(message);
+                MessageBox.Show(owner, message, "Edit Queue Item", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+
+            customOutputPath = null;
+        }
+
+        var directOutputPath = GetDirectOutputPathForQueueRefresh(item, Path.GetDirectoryName(plannedOutputPath) ?? "", outputFormat);
+        var hasExistingDirectOutput = !string.IsNullOrWhiteSpace(directOutputPath) &&
+            string.Equals(directOutputPath, plannedOutputPath, StringComparison.OrdinalIgnoreCase) &&
+            File.Exists(directOutputPath);
+        var previousFfmpegRate = item.FfmpegRateValue;
+
+        item.OutputFormat = outputFormat;
+        item.ConversionMode = conversionMode;
+        item.PlannedOutputPath = plannedOutputPath;
+        item.CustomOutputPath = customOutputPath;
+        item.HasCustomOutputPath = hasCustomOutputPath;
+        item.HasCustomFormat = item.HasCustomFormat || formatChanged;
+        item.HasCustomMode = item.HasCustomMode || modeChanged;
+        item.HasCustomFpsSetting = item.HasCustomFpsSetting || fpsChanged;
+        item.HasExistingDirectOutput = hasExistingDirectOutput;
+        if (fpsChanged || item.RequiresManualFpsSelection || !item.HasResolvedFps)
+        {
+            item.ApplyFpsResolution(fpsSettings, queueItemFpsResolver.ResolveQueueItemFps(item.InputPath, fpsSettings));
+        }
+
+        var hasReusableProbeForFps = QueueItemStatusService.HasReusableProbeForCurrentFps(item);
+
+        if ((!string.Equals(previousFfmpegRate, item.FfmpegRateValue, StringComparison.Ordinal) && !hasReusableProbeForFps) ||
+            item.RequiresManualFpsSelection ||
+            !item.HasResolvedFps)
+        {
+            item.PreProbeResult = null;
+        }
+
+        item.ConversionResult = null;
+        item.ResultStatusSummary = hasExistingDirectOutput ? "Skipped - output already exists" : null;
+        if (hasExistingDirectOutput)
+        {
+            item.Status = QueueItemStatus.Skipped;
+            item.StatusText = "Exists";
+            item.ProgressText = "Selected output exists";
+        }
+        else if (item.RequiresManualFpsSelection || !item.HasResolvedFps)
+        {
+            item.Status = QueueItemStatus.Warning;
+            item.StatusText = "Needs FPS";
+            item.ProgressText = "Choose Source FPS";
+        }
+        else
+        {
+            item.Status = hasExistingDirectOutput ? QueueItemStatus.Skipped : item.PreProbeResult is null ? QueueItemStatus.WaitingForProbe : QueueItemStatus.Ready;
+            item.StatusText = hasExistingDirectOutput ? "Exists" : item.PreProbeResult is null ? QueueItemStatusText.CheckingFile : "Ready";
+            item.ProgressText = hasExistingDirectOutput ? "Selected output exists" : item.PreProbeResult is null ? "" : FormatProbeProgressText(item.PreProbeResult);
+        }
+
+        technicalLog.Append($"Queue item edited. Input: {item.InputPath}; Output: {item.PlannedOutputPath}; Format: {item.OutputFormat.DisplayName()}; Mode: {FormatConversionModeForDisplay(item.ConversionMode)}; FPS: {item.FpsDisplayLabel} ({item.FfmpegRateValue}).");
+        AppendQueueItemFpsTechnicalLog(item, "Queue item FPS detection");
+        RefreshQueueGrid();
+        RefreshDetailsText(DetailsScrollMode.Bottom);
+        RefreshStatusLog("Queue item updated.");
         UpdateQueueButtonState();
         return true;
     }
@@ -804,28 +1144,64 @@ public sealed class MainForm : Form
         var directOutputPath = OutputPathService.GetDirectOutputPath(item.InputPath, outputFolderValidation.FolderPath, settings.OutputFormat);
         var hasExistingDirectOutput = !string.IsNullOrWhiteSpace(directOutputPath) && File.Exists(directOutputPath);
         var previousCustomOutputPath = item.CustomOutputPath;
+        var previousHasCustomOutputPath = item.HasCustomOutputPath;
         item.CustomOutputPath = null;
+        item.HasCustomOutputPath = false;
         var plannedOutputPath = PlanQueueOutputPath(item.InputPath, outputFolderValidation.FolderPath, settings.OutputFormat, item);
         if (string.IsNullOrWhiteSpace(plannedOutputPath))
         {
             item.CustomOutputPath = previousCustomOutputPath;
+            item.HasCustomOutputPath = previousHasCustomOutputPath;
             const string message = "No safe automatic output path could be planned.";
             RefreshStatusLog(message);
             MessageBox.Show(owner, message, "Save As", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return false;
         }
 
+        var hasExistingPlannedOutput = hasExistingDirectOutput &&
+                                       string.Equals(directOutputPath, plannedOutputPath, StringComparison.OrdinalIgnoreCase);
         QueueSettingsLockService.ApplyLockedSettings(
             item,
             settings,
             outputFolderValidation.FolderPath,
             plannedOutputPath,
-            hasExistingDirectOutput,
+            hasExistingPlannedOutput,
             item.PreProbeResult is null ? "Ready" : FormatProbeProgressText(item.PreProbeResult));
+        item.ConversionResult = null;
+        item.ResultStatusSummary = hasExistingPlannedOutput ? "Skipped - output already exists" : null;
 
         technicalLog.Append($"Queue item Save As reset. Input: {item.InputPath}; Output: {item.PlannedOutputPath}");
         RefreshQueueGrid();
         RefreshStatusLog("Save As path reset for the selected queue item.");
+        UpdateQueueButtonState();
+        return true;
+    }
+
+    private bool TryResetQueueItemToQueueDefaults(QueueItem item, IWin32Window owner)
+    {
+        item.ClearCustomSettings();
+        var result = QueueItemRefreshService.RefreshEditableItems(
+            new[] { item },
+            CaptureCurrentQueueSettings(),
+            (queueItem, refreshSettings) => ResolveActiveQueueOutputFolder(queueItem.InputPath, refreshSettings),
+            (queueItem, outputFolderPath, outputFormat) => PlanQueueOutputPath(queueItem.InputPath, outputFolderPath, outputFormat, queueItem),
+            GetDirectOutputPathForQueueRefresh,
+            (queueItem, refreshSettings) => ResolveQueueItemFps(queueItem.InputPath, refreshSettings));
+
+        if (result.InvalidCount > 0)
+        {
+            const string message = "Queue defaults could not be applied to this item.";
+            RefreshStatusLog(message);
+            MessageBox.Show(owner, message, "Edit Queue Item", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+
+        item.ConversionResult = null;
+        item.ResultStatusSummary = item.HasExistingDirectOutput ? "Skipped - output already exists" : null;
+        technicalLog.Append($"Queue item reset to queue defaults. Input: {item.InputPath}; Output: {item.PlannedOutputPath}");
+        RefreshQueueGrid();
+        RefreshDetailsText(DetailsScrollMode.Bottom);
+        RefreshStatusLog("Queue item reset to queue defaults.");
         UpdateQueueButtonState();
         return true;
     }
@@ -848,6 +1224,25 @@ public sealed class MainForm : Form
         technicalLog.Append($"Stop After Current requested. Current item will finish normally. Input: {currentQueueItem.InputPath}");
         RefreshStatusLog("Queue will stop after the current item finishes.");
         UpdateQueueButtonState();
+    }
+
+    private void CancelQueueButton_Click(object? sender, EventArgs e)
+    {
+        if (!isConversionRunning || conversionCancellationTokenSource is null)
+        {
+            return;
+        }
+
+        cancelQueueRequested = true;
+        cancelCurrentOnlyRequested = false;
+        cancelButton.Enabled = false;
+        cancelQueueButton.Enabled = false;
+        stopAfterCurrentButton.Enabled = false;
+        conversionCancellationTokenSource.Cancel();
+        technicalLog.Append(isQueueProcessing
+            ? "Cancel Queue requested. Queue processing will stop after the current operation is canceled."
+            : "Cancel requested for running conversion.");
+        RefreshStatusLog(isQueueProcessing ? "Canceling queue..." : "Canceling conversion...");
     }
 
     private void RemoveSelectedQueueItemButton_Click(object? sender, EventArgs e)
@@ -952,8 +1347,8 @@ public sealed class MainForm : Form
 
         selectionState.IsProbeValid = false;
         selectionState.LastProbeResult = null;
-        var fps = GetSelectedFpsOption();
-        technicalLog.Append($"Frame rate changed. Label: {fps.Label}; FFmpeg value: {fps.FfmpegValue}. Probe validation reset.");
+        var fpsSettings = GetSelectedFpsSettings();
+        technicalLog.Append($"Frame rate changed. Selection: {fpsSettings.RequestedDisplayValue}; Mode: {fpsSettings.SelectionMode}; FFmpeg value: {fpsSettings.ManualFfmpegRateValue}. Probe validation reset.");
         SaveCurrentSettings();
         RefreshStatusLog("Frame rate changed. Probe validation is required for the new FPS setting.");
         UpdateConvertButtonState();
@@ -974,61 +1369,91 @@ public sealed class MainForm : Form
             return;
         }
 
+        cancelCurrentOnlyRequested = isQueueProcessing;
+        cancelQueueRequested = !isQueueProcessing;
         cancelButton.Enabled = false;
-        currentConversionHeadline = "Canceling conversion...";
-        technicalLog.Append(isQueueProcessing ? "Cancel requested for running queue item. Queue will stop after cancellation." : "Cancel requested for running conversion.");
+        currentConversionHeadline = isQueueProcessing ? "Canceling current item..." : "Canceling conversion...";
+        technicalLog.Append(isQueueProcessing
+            ? "Cancel Current requested. Current queue item will be canceled and the queue will continue."
+            : "Cancel requested for running conversion.");
         RefreshStatusLog(currentConversionHeadline);
         conversionCancellationTokenSource?.Cancel();
     }
 
     private void OpenOutputFolderButton_Click(object? sender, EventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(lastSuccessfulOutputPath))
+        var selectedQueueItem = GetSelectedQueueItem();
+        var target = OpenOutputTargetResolver.Resolve(queueItems, selectedQueueItem, lastSuccessfulOutputPath);
+        if (target.QueueItem is not null && GetSelectedQueueItem() is null)
         {
-            technicalLog.Append("Open output folder requested, but no successful output path is available.");
-            RefreshStatusLog("Could not open the output folder.");
-            return;
+            SelectQueueItem(target.QueueItem);
         }
 
         try
         {
-            if (File.Exists(lastSuccessfulOutputPath))
+            if (target.Kind == OpenOutputTargetKind.SelectFile && !string.IsNullOrWhiteSpace(target.Path))
             {
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = "explorer.exe",
-                    Arguments = $"/select,\"{lastSuccessfulOutputPath}\"",
+                    Arguments = $"/select,\"{target.Path}\"",
                     UseShellExecute = true
                 });
-                technicalLog.Append($"Opened Explorer selecting output file: {lastSuccessfulOutputPath}");
+                technicalLog.Append($"Opened Explorer selecting output file: {target.Path}");
                 return;
             }
 
-            var folderPath = Path.GetDirectoryName(lastSuccessfulOutputPath);
-            if (!string.IsNullOrWhiteSpace(folderPath) && Directory.Exists(folderPath))
+            if (target.Kind == OpenOutputTargetKind.OpenFolder && !string.IsNullOrWhiteSpace(target.Path))
             {
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
                 {
-                    FileName = folderPath,
+                    FileName = target.Path,
                     UseShellExecute = true
                 });
-                technicalLog.Append($"Opened output folder: {folderPath}");
+                technicalLog.Append($"Opened output folder: {target.Path}");
                 return;
             }
 
-            technicalLog.Append($"Open Output Folder failed: output path no longer exists and folder could not be opened. Path: {lastSuccessfulOutputPath}");
-            RefreshStatusLog("Could not open the output folder.");
+            technicalLog.Append($"Open Output failed: {target.Message} Path: {FormatOptionalValue(target.Path, "none")}");
+            RefreshStatusLog(target.Message);
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
-            technicalLog.Append($"Open Output Folder failed: {ex}");
-            RefreshStatusLog("Could not open the output folder.");
+            technicalLog.Append($"Open Output failed: {ex}");
+            RefreshStatusLog("Could not open the output location.");
+        }
+        finally
+        {
+            if (selectedQueueItem is not null)
+            {
+                ClearQueueSelection();
+            }
         }
     }
 
     private void ShowDetailsButton_Click(object? sender, EventArgs e)
     {
         SetDetailsVisible(!areDetailsVisible);
+    }
+
+    private void WordWrapButton_Click(object? sender, EventArgs e)
+    {
+        var wasAtBottom = IsDetailsScrolledToBottom();
+        var scrollPosition = GetDetailsScrollPosition();
+        statusLogTextBox.WordWrap = !statusLogTextBox.WordWrap;
+        statusLogTextBox.ScrollBars = statusLogTextBox.WordWrap
+            ? RichTextBoxScrollBars.Vertical
+            : RichTextBoxScrollBars.Both;
+        wordWrapButton.Text = statusLogTextBox.WordWrap ? "Word Wrap: On" : "Word Wrap: Off";
+
+        if (wasAtBottom)
+        {
+            ScrollDetailsToBottom();
+        }
+        else
+        {
+            SetDetailsScrollPosition(scrollPosition);
+        }
     }
 
     private void CopyLogButton_Click(object? sender, EventArgs e)
@@ -1105,7 +1530,7 @@ public sealed class MainForm : Form
         await RefreshQueuedItemsFromCurrentSettingsAsync("Output folder changed");
     }
 
-    private async void AddFilesToQueue(IReadOnlyCollection<string> filePaths)
+    private async Task AddFilesToQueueAsync(IReadOnlyCollection<string> filePaths, bool requireItemConfirmation = false)
     {
         if (filePaths.Count == 0)
         {
@@ -1125,7 +1550,6 @@ public sealed class MainForm : Form
         var overflowCount = filePaths.Count - selectedPaths.Count;
         var addedCount = 0;
         var invalidCount = 0;
-        var duplicateCount = 0;
         var selectedOutputExistsCount = 0;
         var outputPlanFailedCount = 0;
         string? firstAddedPath = null;
@@ -1152,13 +1576,6 @@ public sealed class MainForm : Form
 
             var outputFormat = addSettings.OutputFormat;
             var directOutputPath = OutputPathService.GetDirectOutputPath(validation.FilePath, outputFolderValidation.FolderPath, outputFormat);
-            if (IsDuplicateQueuedJob(validation.FilePath, directOutputPath, newlyAddedItems))
-            {
-                duplicateCount++;
-                technicalLog.Append($"Queue add skipped duplicate job. Input: {validation.FilePath}; Output: {directOutputPath}");
-                continue;
-            }
-
             var hasExistingDirectOutput = !string.IsNullOrWhiteSpace(directOutputPath) && File.Exists(directOutputPath);
             if (hasExistingDirectOutput)
             {
@@ -1174,6 +1591,8 @@ public sealed class MainForm : Form
                 continue;
             }
 
+            var hasExistingPlannedOutput = hasExistingDirectOutput &&
+                                           string.Equals(directOutputPath, plannedOutputPath, StringComparison.OrdinalIgnoreCase);
             var item = new QueueItem(
                 validation.FilePath,
                 plannedOutputPath,
@@ -1182,12 +1601,34 @@ public sealed class MainForm : Form
                 outputFormat,
                 addSettings.ConversionMode,
                 addSettings.Fps,
-                hasExistingDirectOutput);
+                hasExistingPlannedOutput);
+            var shouldResolveAutoDetectInEditor = requireItemConfirmation &&
+                                                  addSettings.FpsSettings.SelectionMode == FpsSelectionMode.AutoDetect;
+            var fpsResolution = shouldResolveAutoDetectInEditor
+                ? QueueItemFpsResolution.PendingAutoDetect()
+                : ResolveQueueItemFps(validation.FilePath, addSettings);
+            item.ApplyFpsResolution(addSettings.FpsSettings, fpsResolution);
+            QueueItemStatusService.ApplyPostFpsResolutionStatus(item);
+            if (requireItemConfirmation)
+            {
+                if (!ShowQueueItemEditor(item, shouldResolveAutoDetectInEditor))
+                {
+                    technicalLog.Append($"Queue add canceled for file while queue was running. Input: {item.InputPath}");
+                    continue;
+                }
+
+                if (item.Status == QueueItemStatus.WaitingForProbe)
+                {
+                    item.StatusText = QueueItemStatusText.Waiting;
+                }
+            }
+
             queueItems.Add(item);
             newlyAddedItems.Add(item);
             addedCount++;
             firstAddedPath ??= validation.FilePath;
-            technicalLog.Append($"Queued file. Input: {item.InputPath}; Output: {item.PlannedOutputPath}; Status: {item.StatusText}; Format: {item.OutputFormat.DisplayName()}; Mode: {FormatConversionModeForDisplay(item.ConversionMode)}; FPS: {item.Fps.Label} ({item.Fps.FfmpegValue}); Destination: {FormatOutputDestinationMode(item.OutputDestinationMode)}.");
+            technicalLog.Append($"Queued file. Input: {item.InputPath}; Output: {item.PlannedOutputPath}; Status: {item.StatusText}; Format: {item.OutputFormat.DisplayName()}; Mode: {FormatConversionModeForDisplay(item.ConversionMode)}; FPS: {item.FpsDisplayLabel} ({item.FfmpegRateValue}); Destination: {FormatOutputDestinationMode(item.OutputDestinationMode)}.");
+            AppendQueueItemFpsTechnicalLog(item, "Queue item FPS detection");
         }
 
         if (overflowCount > 0)
@@ -1217,11 +1658,6 @@ public sealed class MainForm : Form
             summaryParts.Add($"Skipped {invalidCount} invalid file{(invalidCount == 1 ? "" : "s")}.");
         }
 
-        if (duplicateCount > 0)
-        {
-            summaryParts.Add($"Skipped {duplicateCount} duplicate file{(duplicateCount == 1 ? "" : "s")}.");
-        }
-
         if (selectedOutputExistsCount > 0)
         {
             summaryParts.Add($"{selectedOutputExistsCount} file{(selectedOutputExistsCount == 1 ? "" : "s")} already had the selected output format and will be marked after validation.");
@@ -1241,7 +1677,7 @@ public sealed class MainForm : Form
         {
             summaryParts.Add(stopAfterCurrentRequested
                 ? "Files were added to the queue. They will remain pending because Stop After Current was requested."
-                : "Queue is running; new files were added using the active queue settings.");
+                : "Queue is running; confirmed files were added and will be processed automatically when ready.");
         }
 
         RefreshStatusLog(summaryParts.Count == 0 ? "No files were added to the queue." : string.Join(" ", summaryParts));
@@ -1295,7 +1731,7 @@ public sealed class MainForm : Form
             while (!isQueueProcessing && !isConversionRunning)
             {
                 var candidates = queueItems
-                    .Where(item => item.Status == QueueItemStatus.WaitingForProbe)
+                    .Where(QueuePreProbeService.ShouldPreProbe)
                     .ToList();
 
                 if (candidates.Count == 0)
@@ -1308,34 +1744,43 @@ public sealed class MainForm : Form
 
                 foreach (var item in candidates)
                 {
-                    if (!queueItems.Contains(item) || item.Status != QueueItemStatus.WaitingForProbe)
+                    if (!queueItems.Contains(item) || !QueuePreProbeService.ShouldPreProbe(item))
                     {
                         continue;
                     }
 
                     SetQueueItemStatus(item, QueueItemStatus.Probing, "Probing", "");
-                    technicalLog.Append($"Queue pre-probe item. Input: {item.InputPath}; FPS: {item.Fps.Label} ({item.Fps.FfmpegValue}).");
+                    var probeFps = GetProbeFpsOption(item);
+                    technicalLog.Append($"Queue pre-probe item. Input: {item.InputPath}; FPS: {probeFps.Label} ({probeFps.FfmpegValue}){(item.HasResolvedFps ? "" : " probe-only")}.");
 
-                    var probeResult = await probeService.ProbeRawH264Async(item.InputPath, item.Fps, CancellationToken.None);
+                    var probeResult = await probeService.ProbeRawH264Async(item.InputPath, probeFps, CancellationToken.None);
                     if (!queueItems.Contains(item))
                     {
                         continue;
                     }
 
-                    item.PreProbeResult = probeResult;
                     validatedCount++;
+                    QueueItemStatusService.ApplyPreProbeResult(item, probeResult);
 
                     if (probeResult.IsSuccess)
                     {
+                        if (item.RequiresManualFpsSelection || !item.HasResolvedFps)
+                        {
+                            RefreshQueueGrid();
+                            technicalLog.Append($"Queue pre-probe succeeded; Source FPS still needs manual selection. Input: {item.InputPath}; Codec: {FormatOptionalValue(probeResult.CodecName, "unknown")}; Resolution: {FormatResolution(probeResult.Width, probeResult.Height)}; Profile: {FormatOptionalValue(probeResult.Profile, "unknown")}.");
+                            continue;
+                        }
+
                         if (item.HasExistingDirectOutput)
                         {
                             selectedOutputExistsCount++;
-                            SetQueueItemStatus(item, QueueItemStatus.Skipped, "Exists", "Selected output exists");
+                            RefreshQueueGrid();
+                            technicalLog.Append(QueueItemResultFormatter.BuildLogLine(item, queueItems.IndexOf(item) + 1, queueItems.Count));
                         }
                         else
                         {
                             readyCount++;
-                            SetQueueItemStatus(item, QueueItemStatus.Ready, "Ready", FormatProbeProgressText(probeResult));
+                            RefreshQueueGrid();
                         }
 
                         technicalLog.Append($"Queue pre-probe succeeded. Input: {item.InputPath}; Codec: {FormatOptionalValue(probeResult.CodecName, "unknown")}; Resolution: {FormatResolution(probeResult.Width, probeResult.Height)}; Profile: {FormatOptionalValue(probeResult.Profile, "unknown")}.");
@@ -1343,9 +1788,10 @@ public sealed class MainForm : Form
                     else
                     {
                         unsupportedCount++;
-                        SetQueueItemStatus(item, QueueItemStatus.Unsupported, "Unsupported", "Will not process");
+                        RefreshQueueGrid();
                         technicalLog.Append($"Queue pre-probe failed. Input: {item.InputPath}; Message: {ProbeResult.UnsupportedMessage}");
                         technicalLog.AppendBlock("Queue pre-probe technical details", probeResult.TechnicalDetails);
+                        technicalLog.Append(QueueItemResultFormatter.BuildLogLine(item, queueItems.IndexOf(item) + 1, queueItems.Count));
                     }
                 }
             }
@@ -1391,7 +1837,8 @@ public sealed class MainForm : Form
             settings,
             (item, refreshSettings) => ResolveActiveQueueOutputFolder(item.InputPath, refreshSettings),
             (item, outputFolderPath, outputFormat) => PlanQueueOutputPath(item.InputPath, outputFolderPath, outputFormat, item),
-            GetDirectOutputPathForQueueRefresh);
+            GetDirectOutputPathForQueueRefresh,
+            (item, refreshSettings) => ResolveQueueItemFps(item.InputPath, refreshSettings));
 
         if (result.RefreshedCount == 0 && result.InvalidCount == 0)
         {
@@ -1401,7 +1848,7 @@ public sealed class MainForm : Form
 
         technicalLog.Append($"Queue refreshed from current settings. Reason: {reason}; Items refreshed: {result.RefreshedCount}; Items invalid: {result.InvalidCount}; Settings: {FormatQueueSettings(settings)}; Destination: {FormatOutputDestinationMode(settings.OutputDestinationMode)}; Chosen folder: {FormatOptionalValue(settings.ChosenOutputFolder, "none")}.");
         RefreshQueueGrid();
-        RefreshDetailsText();
+        RefreshDetailsText(DetailsScrollMode.Bottom);
         UpdateConvertButtonState();
         await PreProbeWaitingQueueItemsIfIdleAsync();
     }
@@ -1409,9 +1856,7 @@ public sealed class MainForm : Form
     private FolderQueueAddPreview CreateFolderQueueAddPreview(IReadOnlyCollection<string> filePaths, QueueSettingsSnapshot addSettings)
     {
         var addablePaths = new List<string>();
-        var addableJobs = new List<QueueAddCandidate>();
         var invalidCount = 0;
-        var duplicateCount = 0;
         var alreadyConvertedSkippedCount = 0;
         var outputPlanFailedCount = 0;
 
@@ -1434,12 +1879,6 @@ public sealed class MainForm : Form
 
             var outputFormat = addSettings.OutputFormat;
             var directOutputPath = OutputPathService.GetDirectOutputPath(validation.FilePath, outputFolderValidation.FolderPath, outputFormat);
-            if (IsDuplicateQueuedJob(validation.FilePath, directOutputPath, addableJobs))
-            {
-                duplicateCount++;
-                continue;
-            }
-
             var hasExistingDirectOutput = !string.IsNullOrWhiteSpace(directOutputPath) && File.Exists(directOutputPath);
             if (hasExistingDirectOutput)
             {
@@ -1454,10 +1893,9 @@ public sealed class MainForm : Form
             }
 
             addablePaths.Add(validation.FilePath);
-            addableJobs.Add(new QueueAddCandidate(validation.FilePath, directOutputPath));
         }
 
-        return new FolderQueueAddPreview(addablePaths, invalidCount, duplicateCount, alreadyConvertedSkippedCount, outputPlanFailedCount);
+        return new FolderQueueAddPreview(addablePaths, invalidCount, alreadyConvertedSkippedCount, outputPlanFailedCount);
     }
 
     private void RecalculatePlannedOutputPath()
@@ -1500,67 +1938,128 @@ public sealed class MainForm : Form
             selectionState.OutputDestinationMode,
             selectionState.OutputDestinationMode == OutputDestinationMode.ChooseOutputFolder
                 ? selectionState.ChosenOutputFolderPath
-                : null);
+                : null)
+        {
+            FpsSettings = GetSelectedFpsSettings()
+        };
     }
 
     private static string FormatQueueSettings(QueueSettingsSnapshot settings)
     {
-        return $"Format: {settings.OutputFormat.DisplayName()} | Mode: {FormatConversionModeForDisplay(settings.ConversionMode)} | Source FPS: {settings.Fps.Label}";
+        return $"Format: {settings.OutputFormat.DisplayName()} | Mode: {FormatConversionModeForDisplay(settings.ConversionMode)} | Source FPS: {settings.FpsSettings.RequestedDisplayValue}";
     }
 
-    private void ShowAddWhileRunningWarningIfNeeded()
+    private QueueItemFpsResolution ResolveQueueItemFps(string datPath, QueueSettingsSnapshot settings)
     {
-        if (!isQueueProcessing || activeQueueSettings is null)
+        return queueItemFpsResolver.ResolveQueueItemFps(datPath, settings.FpsSettings);
+    }
+
+    private bool TryPrepareForQueueAdd()
+    {
+        if (isQueueProcessing)
         {
-            return;
+            return true;
         }
 
-        var message = AddWhileRunningWarningMessage +
-            "\r\n\r\n" +
-            FormatQueueSettings(activeQueueSettings);
-        MessageBox.Show(this, message, "Queue Running", MessageBoxButtons.OK, MessageBoxIcon.Information);
-    }
-
-    private bool IsDuplicateQueuedJob(string inputPath, string? directOutputPath, IEnumerable<QueueItem> newlyAddedItems)
-    {
-        return queueItems.Any(item => IsSameQueueJob(item.InputPath, GetDirectOutputPathForQueuedItem(item), inputPath, directOutputPath)) ||
-               newlyAddedItems.Any(item => IsSameQueueJob(item.InputPath, GetDirectOutputPathForQueuedItem(item), inputPath, directOutputPath));
-    }
-
-    private bool IsDuplicateQueuedJob(string inputPath, string? directOutputPath, IEnumerable<QueueAddCandidate> newlyAddedJobs)
-    {
-        return queueItems.Any(item => IsSameQueueJob(item.InputPath, GetDirectOutputPathForQueuedItem(item), inputPath, directOutputPath)) ||
-               newlyAddedJobs.Any(item => IsSameQueueJob(item.InputPath, item.DirectOutputPath, inputPath, directOutputPath));
-    }
-
-    private static bool IsSameQueueJob(string? existingInputPath, string? existingDirectOutputPath, string? newInputPath, string? newDirectOutputPath)
-    {
-        return !string.IsNullOrWhiteSpace(existingInputPath) &&
-               !string.IsNullOrWhiteSpace(existingDirectOutputPath) &&
-               !string.IsNullOrWhiteSpace(newInputPath) &&
-               !string.IsNullOrWhiteSpace(newDirectOutputPath) &&
-               string.Equals(existingInputPath, newInputPath, StringComparison.OrdinalIgnoreCase) &&
-               string.Equals(existingDirectOutputPath, newDirectOutputPath, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private string? GetDirectOutputPathForQueuedItem(QueueItem item)
-    {
-        if (!string.IsNullOrWhiteSpace(item.CustomOutputPath))
+        if (!QueueAddFlowService.HasOnlyFinishedItems(queueItems))
         {
-            var customValidation = OutputPathService.ValidateCustomOutputPath(
-                item.InputPath,
-                item.CustomOutputPath,
-                item.OutputFormat,
-                requireAvailable: false,
-                allowExtensionCorrection: true);
-            return customValidation.IsValid ? customValidation.OutputPath : null;
+            return true;
         }
 
-        var outputFolderPath = item.OutputDestinationMode == OutputDestinationMode.SameFolderAsSource
-            ? Path.GetDirectoryName(item.InputPath)
-            : item.SelectedOutputFolder;
+        var choice = ShowFinishedQueueAddPrompt();
+        if (choice == FinishedQueueAddChoice.Cancel)
+        {
+            RefreshStatusLog("Add canceled. Queue was not changed.");
+            return false;
+        }
 
-        return OutputPathService.GetDirectOutputPath(item.InputPath, outputFolderPath, item.OutputFormat);
+        if (choice == FinishedQueueAddChoice.ClearAndAdd)
+        {
+            var clearedCount = queueItems.Count;
+            queueItems.Clear();
+            ResetQueueColumnAutoFitIfQueueIsEmpty();
+            technicalLog.Append($"Cleared finished queue before adding more files. Items cleared: {clearedCount}.");
+            RefreshQueueGrid();
+            RefreshDetailsText(DetailsScrollMode.Bottom);
+            RefreshStatusLog("Finished queue cleared. Choose files to add.");
+        }
+
+        return true;
+    }
+
+    private FinishedQueueAddChoice ShowFinishedQueueAddPrompt()
+    {
+        using var dialog = new Form
+        {
+            Text = "Add to Queue",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            ClientSize = new Size(500, 180),
+            Font = Font
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            Padding = new Padding(18),
+            ColumnCount = 1,
+            RowCount = 2
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+
+        var label = new Label
+        {
+            Dock = DockStyle.Fill,
+            Text = "The queue already has finished items.\r\n\r\nStart a new queue before adding more files?",
+            TextAlign = ContentAlignment.MiddleLeft
+        };
+        var buttons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false
+        };
+
+        var cancelButton = CreateButton("Cancel");
+        var keepButton = CreateButton("Keep and Add");
+        var clearButton = CreateButton("Clear and Add");
+        cancelButton.Size = new Size(110, 42);
+        keepButton.Size = new Size(130, 42);
+        clearButton.Size = new Size(130, 42);
+
+        var choice = FinishedQueueAddChoice.Cancel;
+        cancelButton.Click += (_, _) =>
+        {
+            choice = FinishedQueueAddChoice.Cancel;
+            dialog.DialogResult = DialogResult.Cancel;
+            dialog.Close();
+        };
+        keepButton.Click += (_, _) =>
+        {
+            choice = FinishedQueueAddChoice.KeepAndAdd;
+            dialog.DialogResult = DialogResult.OK;
+            dialog.Close();
+        };
+        clearButton.Click += (_, _) =>
+        {
+            choice = FinishedQueueAddChoice.ClearAndAdd;
+            dialog.DialogResult = DialogResult.OK;
+            dialog.Close();
+        };
+
+        buttons.Controls.Add(cancelButton);
+        buttons.Controls.Add(keepButton);
+        buttons.Controls.Add(clearButton);
+        root.Controls.Add(label, 0, 0);
+        root.Controls.Add(buttons, 0, 1);
+        dialog.Controls.Add(root);
+        dialog.CancelButton = cancelButton;
+        dialog.ShowDialog(this);
+        return choice;
     }
 
     private string? GetDirectOutputPathForQueueRefresh(QueueItem item, string outputFolderPath, OutputFormat outputFormat)
@@ -1597,7 +2096,9 @@ public sealed class MainForm : Form
             excludedItem.CustomOutputPath = customValidation.OutputPath;
             if (File.Exists(customValidation.OutputPath))
             {
-                return customValidation.OutputPath;
+                return IsAllowedQueueOutputPath(customValidation.OutputPath, excludedItem)
+                    ? customValidation.OutputPath
+                    : null;
             }
 
             return IsAvailableQueueOutputPath(customValidation.OutputPath, excludedItem)
@@ -1611,28 +2112,22 @@ public sealed class MainForm : Form
             return null;
         }
 
-        if (OutputPathService.IsSafeOutputPath(inputPath, directOutputPath) &&
-            IsAvailableQueueOutputPath(directOutputPath, excludedItem))
-        {
-            return directOutputPath;
-        }
-
-        var inputBaseName = Path.GetFileNameWithoutExtension(inputPath);
-        var extension = Path.GetExtension(directOutputPath);
-        if (string.IsNullOrWhiteSpace(inputBaseName) || string.IsNullOrWhiteSpace(extension))
-        {
-            return null;
-        }
-
-        return OutputPathService.IsSafeOutputPath(inputPath, directOutputPath)
-            ? directOutputPath
-            : null;
+        return OutputPathService.PlanUniqueOutputPath(
+            inputPath,
+            outputFolderPath,
+            outputFormat,
+            candidate => IsAllowedQueueOutputPath(candidate, excludedItem));
     }
 
     private bool IsAvailableQueueOutputPath(string outputPath, QueueItem? excludedItem = null)
     {
+        return IsAllowedQueueOutputPath(outputPath, excludedItem) &&
+               !File.Exists(outputPath);
+    }
+
+    private bool IsAllowedQueueOutputPath(string outputPath, QueueItem? excludedItem = null)
+    {
         return (excludedItem is null || OutputPathService.IsSafeOutputPath(excludedItem.InputPath, outputPath)) &&
-               !File.Exists(outputPath) &&
                !queueItems.Any(item => item != excludedItem && string.Equals(item.PlannedOutputPath, outputPath, StringComparison.OrdinalIgnoreCase));
     }
 
@@ -1643,7 +2138,16 @@ public sealed class MainForm : Form
 
         foreach (var item in queueItems.Where(CanApplyLockedQueueSettings).ToList())
         {
-            var outputFolderPath = ResolveActiveQueueOutputFolder(item.InputPath, settings);
+            var itemFpsSettings = item.HasCustomFpsSetting ? item.FpsSettings : settings.FpsSettings;
+            var itemSettings = settings with
+            {
+                OutputFormat = item.HasCustomFormat ? item.OutputFormat : settings.OutputFormat,
+                ConversionMode = item.HasCustomMode ? item.ConversionMode : settings.ConversionMode,
+                Fps = itemFpsSettings.ToManualFpsOption(),
+                FpsSettings = itemFpsSettings
+            };
+
+            var outputFolderPath = ResolveActiveQueueOutputFolder(item.InputPath, itemSettings);
             var outputFolderValidation = OutputFolderValidator.ValidateOutputFolder(outputFolderPath);
             if (!outputFolderValidation.IsValid || string.IsNullOrWhiteSpace(outputFolderValidation.FolderPath))
             {
@@ -1651,30 +2155,40 @@ public sealed class MainForm : Form
                 item.Status = QueueItemStatus.Failed;
                 item.StatusText = "Failed";
                 item.ProgressText = "Output folder invalid";
+                item.ConversionResult = null;
+                item.ResultStatusSummary = "Skipped - invalid output path";
                 technicalLog.Append($"Queue settings lock failed for item because output destination is invalid. Input: {item.InputPath}; Output folder: {outputFolderPath}; Reason: {outputFolderValidation.Message}");
                 continue;
             }
 
-            var directOutputPath = GetDirectOutputPathForQueueRefresh(item, outputFolderValidation.FolderPath, settings.OutputFormat);
+            var directOutputPath = GetDirectOutputPathForQueueRefresh(item, outputFolderValidation.FolderPath, itemSettings.OutputFormat);
             var hasExistingDirectOutput = !string.IsNullOrWhiteSpace(directOutputPath) && File.Exists(directOutputPath);
-            var plannedOutputPath = PlanQueueOutputPath(item.InputPath, outputFolderValidation.FolderPath, settings.OutputFormat, item);
+            var plannedOutputPath = PlanQueueOutputPath(item.InputPath, outputFolderValidation.FolderPath, itemSettings.OutputFormat, item);
+            var hasExistingPlannedOutput = hasExistingDirectOutput &&
+                                           !string.IsNullOrWhiteSpace(plannedOutputPath) &&
+                                           string.Equals(directOutputPath, plannedOutputPath, StringComparison.OrdinalIgnoreCase);
             if (string.IsNullOrWhiteSpace(plannedOutputPath))
             {
                 failedCount++;
                 item.Status = QueueItemStatus.Failed;
                 item.StatusText = "Failed";
                 item.ProgressText = "No safe output path";
+                item.ConversionResult = null;
+                item.ResultStatusSummary = "Skipped - invalid output path";
                 technicalLog.Append($"Queue settings lock failed for item because no safe output path could be planned. Input: {item.InputPath}; Output folder: {outputFolderValidation.FolderPath}; Format: {settings.OutputFormat.DisplayName()}");
                 continue;
             }
 
             QueueSettingsLockService.ApplyLockedSettings(
                 item,
-                settings,
+                itemSettings,
                 outputFolderValidation.FolderPath,
                 plannedOutputPath,
-                hasExistingDirectOutput,
-                item.PreProbeResult is null ? "Ready" : FormatProbeProgressText(item.PreProbeResult));
+                hasExistingPlannedOutput,
+                item.PreProbeResult is null ? "Ready" : FormatProbeProgressText(item.PreProbeResult),
+                ResolveQueueItemFps(item.InputPath, itemSettings));
+            item.ConversionResult = null;
+            item.ResultStatusSummary = hasExistingPlannedOutput ? "Skipped - output already exists" : null;
             lockedCount++;
         }
 
@@ -1690,46 +2204,183 @@ public sealed class MainForm : Form
         return item.Status is QueueItemStatus.Ready or QueueItemStatus.Warning or QueueItemStatus.Skipped;
     }
 
+    private static string FormatQueueFpsForRow(QueueItem item)
+    {
+        return item.RequiresManualFpsSelection || !item.HasResolvedFps
+            ? "Needs FPS"
+            : item.FpsDisplayLabel;
+    }
+
     private void RefreshQueueGrid()
     {
-        queueGridView.Rows.Clear();
+        var selectedItem = GetSelectedQueueItem();
+        var firstDisplayedRowIndex = TryGetFirstDisplayedQueueRowIndex();
+        var rebuiltRows = !CanUpdateQueueRowsInPlace();
 
-        foreach (var item in queueItems)
+        isRefreshingQueueGrid = true;
+        queueGridView.SuspendLayout();
+        try
         {
-            var rowIndex = queueGridView.Rows.Add(
-                item.StatusText,
-                Path.GetFileName(item.InputPath),
-                item.PlannedOutputPath,
-                item.OutputFormat.DisplayName(),
-                FormatConversionModeForDisplay(item.ConversionMode),
-                item.Fps.Label,
-                item.ProgressText);
-            queueGridView.Rows[rowIndex].Tag = item;
-            if (item.Status is QueueItemStatus.Probing or QueueItemStatus.Converting)
+            if (rebuiltRows)
             {
-                queueGridView.Rows[rowIndex].DefaultCellStyle.BackColor = Color.FromArgb(232, 244, 255);
+                queueGridView.Rows.Clear();
+                foreach (var item in queueItems)
+                {
+                    var rowIndex = queueGridView.Rows.Add();
+                    UpdateQueueGridRow(queueGridView.Rows[rowIndex], item);
+                }
             }
-            else if (item.Status == QueueItemStatus.Ready)
+            else
             {
-                queueGridView.Rows[rowIndex].DefaultCellStyle.BackColor = Color.FromArgb(240, 250, 240);
+                for (var index = 0; index < queueItems.Count; index++)
+                {
+                    UpdateQueueGridRow(queueGridView.Rows[index], queueItems[index]);
+                }
             }
-            else if (item.Status == QueueItemStatus.Completed)
+
+            queueGridView.ClearSelection();
+            RestoreQueueGridViewState(selectedItem, firstDisplayedRowIndex);
+        }
+        finally
+        {
+            queueGridView.ResumeLayout();
+            isRefreshingQueueGrid = false;
+        }
+
+        if (rebuiltRows && !isQueueProcessing)
+        {
+            ApplyQueueAutoFitColumnWidths();
+        }
+
+        UpdateQueueButtonState();
+    }
+
+    private bool CanUpdateQueueRowsInPlace()
+    {
+        if (queueGridView.Rows.Count != queueItems.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < queueItems.Count; index++)
+        {
+            if (!ReferenceEquals(queueGridView.Rows[index].Tag, queueItems[index]))
             {
-                queueGridView.Rows[rowIndex].DefaultCellStyle.BackColor = Color.FromArgb(232, 248, 232);
-            }
-            else if (item.Status is QueueItemStatus.Failed or QueueItemStatus.Canceled or QueueItemStatus.Unsupported)
-            {
-                queueGridView.Rows[rowIndex].DefaultCellStyle.BackColor = Color.FromArgb(255, 235, 235);
-            }
-            else if (item.Status == QueueItemStatus.Skipped || item.HasExistingDirectOutput)
-            {
-                queueGridView.Rows[rowIndex].DefaultCellStyle.BackColor = Color.FromArgb(255, 250, 225);
+                return false;
             }
         }
 
-        queueGridView.ClearSelection();
-        ApplyQueueAutoFitColumnWidths();
-        UpdateQueueButtonState();
+        return true;
+    }
+
+    private void UpdateQueueGridRow(DataGridViewRow row, QueueItem item)
+    {
+        row.Tag = item;
+        SetQueueCellValue(row, "Status", item.StatusText);
+        SetQueueCellValue(row, "File", Path.GetFileName(item.InputPath));
+        SetQueueCellValue(row, "Output", item.PlannedOutputPath);
+        SetQueueCellValue(row, "Format", item.OutputFormat.DisplayName());
+        SetQueueCellValue(row, "Mode", FormatConversionModeForDisplay(item.ConversionMode));
+        SetQueueCellValue(row, "Fps", FormatQueueFpsForRow(item));
+        SetQueueCellValue(row, "Progress", item.ProgressText);
+        ApplyQueueGridRowStyle(row, item);
+    }
+
+    private static void SetQueueCellValue(DataGridViewRow row, string columnName, string? value)
+    {
+        var cell = row.Cells[columnName];
+        var displayValue = value ?? string.Empty;
+        if (!string.Equals(Convert.ToString(cell.Value), displayValue, StringComparison.Ordinal))
+        {
+            cell.Value = displayValue;
+        }
+    }
+
+    private static void ApplyQueueGridRowStyle(DataGridViewRow row, QueueItem item)
+    {
+        row.DefaultCellStyle.BackColor = Color.Empty;
+        var fpsCell = row.Cells["Fps"];
+        fpsCell.Style.ForeColor = Color.Empty;
+        fpsCell.ToolTipText = string.Empty;
+
+        if (item.RequiresManualFpsSelection || !item.HasResolvedFps)
+        {
+            fpsCell.Style.ForeColor = Color.FromArgb(160, 92, 0);
+            fpsCell.ToolTipText = "Double-click this row and choose Source FPS.";
+        }
+
+        if (item.Status is QueueItemStatus.Probing or QueueItemStatus.Converting)
+        {
+            row.DefaultCellStyle.BackColor = Color.FromArgb(232, 244, 255);
+        }
+        else if (item.Status == QueueItemStatus.Ready)
+        {
+            row.DefaultCellStyle.BackColor = Color.FromArgb(240, 250, 240);
+        }
+        else if (item.Status == QueueItemStatus.Completed)
+        {
+            row.DefaultCellStyle.BackColor = Color.FromArgb(232, 248, 232);
+        }
+        else if (item.Status is QueueItemStatus.Failed or QueueItemStatus.Canceled or QueueItemStatus.Unsupported)
+        {
+            row.DefaultCellStyle.BackColor = Color.FromArgb(255, 235, 235);
+        }
+        else if (item.Status == QueueItemStatus.Skipped || item.HasExistingDirectOutput)
+        {
+            row.DefaultCellStyle.BackColor = Color.FromArgb(255, 250, 225);
+        }
+    }
+
+    private int TryGetFirstDisplayedQueueRowIndex()
+    {
+        try
+        {
+            return queueGridView.Rows.Count == 0 ? -1 : queueGridView.FirstDisplayedScrollingRowIndex;
+        }
+        catch (InvalidOperationException)
+        {
+            return -1;
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return -1;
+        }
+    }
+
+    private void RestoreQueueGridViewState(QueueItem? selectedItem, int firstDisplayedRowIndex)
+    {
+        var restoredFirstDisplayedRowIndex = QueueGridScrollState.CoerceFirstDisplayedRowIndex(firstDisplayedRowIndex, queueGridView.Rows.Count);
+        if (restoredFirstDisplayedRowIndex >= 0)
+        {
+            try
+            {
+                queueGridView.FirstDisplayedScrollingRowIndex = restoredFirstDisplayedRowIndex;
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+            }
+        }
+
+        if (selectedItem is null)
+        {
+            queueGridView.CurrentCell = null;
+            return;
+        }
+
+        foreach (DataGridViewRow row in queueGridView.Rows)
+        {
+            if (ReferenceEquals(row.Tag, selectedItem))
+            {
+                row.Selected = true;
+                queueGridView.CurrentCell = row.Cells[0];
+                return;
+            }
+        }
+
+        queueGridView.CurrentCell = null;
     }
 
     private void ApplyQueueAutoFitColumnWidths()
@@ -1789,12 +2440,16 @@ public sealed class MainForm : Form
                                    !isConversionRunning &&
                                    !isQueuePreProbeRunning &&
                                    !HasPendingQueueValidation() &&
-                                   queueItems.Any(IsProcessableQueueItem);
-        stopAfterCurrentButton.Enabled = isQueueProcessing &&
-                                         !stopAfterCurrentRequested &&
-                                         currentQueueItem is not null &&
-                                         (currentQueueItem.Status is QueueItemStatus.Probing or QueueItemStatus.Converting);
+                                   (queueItems.Any(IsProcessableQueueItem) ||
+                                    QueueFpsValidationService.FindItemsRequiringManualFps(queueItems).Count > 0);
+        var hasActiveQueueConversion = isQueueProcessing &&
+                                       currentQueueItem is not null &&
+                                       currentQueueItem.Status == QueueItemStatus.Converting;
+        cancelButton.Enabled = hasActiveQueueConversion;
+        stopAfterCurrentButton.Enabled = hasActiveQueueConversion && !stopAfterCurrentRequested;
         stopAfterCurrentButton.Text = stopAfterCurrentRequested ? "Stop Requested" : "Stop After Current";
+        cancelQueueButton.Enabled = isQueueProcessing;
+        openOutputFolderButton.Enabled = OpenOutputTargetResolver.Resolve(queueItems, GetSelectedQueueItem(), lastSuccessfulOutputPath).Kind != OpenOutputTargetKind.Unavailable;
         var allowQueueEditing = queueGridView.Enabled;
         removeSelectedQueueItemButton.Enabled = allowQueueEditing && queueItems.Any(item =>
             item != currentQueueItem &&
@@ -1816,9 +2471,35 @@ public sealed class MainForm : Form
             return;
         }
 
+        var itemsRequiringFps = QueueFpsValidationService.FindItemsRequiringManualFps(queueItems);
+        if (itemsRequiringFps.Count > 0)
+        {
+            var message = QueueFpsValidationService.BuildManualFpsRequiredMessage(itemsRequiringFps);
+            RefreshStatusLog("Some queued files need Source FPS before conversion can start.");
+            technicalLog.Append(message);
+            MessageBox.Show(this, message, "Source FPS Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            UpdateQueueButtonState();
+            return;
+        }
+
         CancelCurrentProbe();
         activeQueueSettings = CaptureCurrentQueueSettings();
+        lastQueueRunSettings = activeQueueSettings;
+        lastQueueRunStatus = "Running";
         ApplyLockedQueueSettingsToQueuedItems(activeQueueSettings);
+
+        itemsRequiringFps = QueueFpsValidationService.FindItemsRequiringManualFps(queueItems);
+        if (itemsRequiringFps.Count > 0)
+        {
+            activeQueueSettings = null;
+            lastQueueRunStatus = "Not started";
+            var message = QueueFpsValidationService.BuildManualFpsRequiredMessage(itemsRequiringFps);
+            RefreshStatusLog("Some queued files need Source FPS before conversion can start.");
+            technicalLog.Append(message);
+            MessageBox.Show(this, message, "Source FPS Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            UpdateQueueButtonState();
+            return;
+        }
 
         if (!queueItems.Any(IsProcessableQueueItem))
         {
@@ -1831,6 +2512,8 @@ public sealed class MainForm : Form
         isQueueProcessing = true;
         isConversionRunning = true;
         stopAfterCurrentRequested = false;
+        cancelCurrentOnlyRequested = false;
+        cancelQueueRequested = false;
         lastConversionResult = null;
         lastConversionProgress = null;
         lastSuccessfulOutputPath = null;
@@ -1842,22 +2525,41 @@ public sealed class MainForm : Form
         conversionProgressBar.Style = ProgressBarStyle.Blocks;
         conversionProgressBar.MarqueeAnimationSpeed = 0;
         conversionProgressBar.Value = 0;
+        technicalLog.Append($"----- Queue run started: {DateTime.Now:yyyy-MM-dd HH:mm:ss} -----");
         technicalLog.Append($"Queue started. Processable items: {queueItems.Count(IsProcessableQueueItem)}; Total queued: {queueItems.Count}; Active settings: {FormatQueueSettings(activeQueueSettings)}; Destination: {FormatOutputDestinationMode(activeQueueSettings.OutputDestinationMode)}; Chosen folder: {FormatOptionalValue(activeQueueSettings.ChosenOutputFolder, "none")}.");
         RefreshStatusLog($"Queue started. Processing 1 of {queueItems.Count(IsProcessableQueueItem)}.");
 
         var queueCanceled = false;
         var stoppedAfterCurrent = false;
-        var ordinal = 0;
         var attemptedItems = new HashSet<QueueItem>();
 
         try
         {
             while (true)
             {
-                if (conversionCancellationTokenSource.IsCancellationRequested)
+                if (conversionCancellationTokenSource.IsCancellationRequested && !cancelCurrentOnlyRequested)
                 {
                     queueCanceled = true;
                     break;
+                }
+
+                var validationItem = queueItems.FirstOrDefault(QueueRunningValidationService.ShouldProbeBeforeContinuing);
+                if (validationItem is not null)
+                {
+                    var validationResult = await ProbeQueueItemForReadinessDuringRunAsync(validationItem, conversionCancellationTokenSource.Token);
+                    if (validationResult?.WasCanceled == true || conversionCancellationTokenSource.IsCancellationRequested)
+                    {
+                        if (cancelCurrentOnlyRequested && !cancelQueueRequested)
+                        {
+                            ResetQueueCancellationForNextItem();
+                            continue;
+                        }
+
+                        queueCanceled = true;
+                        break;
+                    }
+
+                    continue;
                 }
 
                 var remainingProcessableItems = queueItems
@@ -1866,19 +2568,37 @@ public sealed class MainForm : Form
 
                 if (remainingProcessableItems.Count == 0)
                 {
+                    if (pendingRunningQueueAddOperations > 0)
+                    {
+                        try
+                        {
+                            await Task.Delay(200, conversionCancellationTokenSource.Token);
+                            continue;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            queueCanceled = true;
+                        }
+                    }
+
                     break;
                 }
 
                 var item = remainingProcessableItems[0];
                 attemptedItems.Add(item);
-                ordinal++;
                 currentQueueItem = item;
-                var dynamicTotal = ordinal + remainingProcessableItems.Count - 1;
-                var result = await ProcessQueueItemAsync(item, ordinal, dynamicTotal, conversionCancellationTokenSource.Token);
+                var queueOrdinal = queueItems.IndexOf(item) + 1;
+                var result = await ProcessQueueItemAsync(item, queueOrdinal, queueItems.Count, conversionCancellationTokenSource.Token);
                 lastConversionResult = result;
 
                 if (result?.WasCanceled == true || conversionCancellationTokenSource.IsCancellationRequested)
                 {
+                    if (cancelCurrentOnlyRequested && !cancelQueueRequested)
+                    {
+                        ResetQueueCancellationForNextItem();
+                        continue;
+                    }
+
                     queueCanceled = true;
                     break;
                 }
@@ -1897,10 +2617,13 @@ public sealed class MainForm : Form
             isQueueProcessing = false;
             isConversionRunning = false;
             stopAfterCurrentRequested = false;
+            cancelCurrentOnlyRequested = false;
+            cancelQueueRequested = false;
             activeQueueSettings = null;
             conversionProgressBar.Style = ProgressBarStyle.Blocks;
             conversionProgressBar.MarqueeAnimationSpeed = 0;
             cancelButton.Enabled = false;
+            cancelQueueButton.Enabled = false;
             stopAfterCurrentButton.Enabled = false;
             stopAfterCurrentButton.Text = "Stop After Current";
             conversionCancellationTokenSource?.Dispose();
@@ -1909,7 +2632,9 @@ public sealed class MainForm : Form
 
         }
 
+        lastQueueRunStatus = BuildQueueRunStatus(queueCanceled, stoppedAfterCurrent);
         var summary = BuildQueueSummary(queueCanceled, stoppedAfterCurrent);
+        technicalLog.Append(BuildQueueItemResultsSection());
         technicalLog.Append(summary);
         RefreshQueueGrid();
         RefreshStatusLog(summary);
@@ -1921,44 +2646,76 @@ public sealed class MainForm : Form
         }
     }
 
+    private void ResetQueueCancellationForNextItem()
+    {
+        technicalLog.Append("Cancel Current completed. Queue will continue with the next runnable item.");
+        cancelCurrentOnlyRequested = false;
+        conversionCancellationTokenSource?.Dispose();
+        conversionCancellationTokenSource = new CancellationTokenSource();
+        cancelButton.Enabled = false;
+        cancelQueueButton.Enabled = true;
+        RefreshStatusLog("Current item canceled. Continuing queue...");
+    }
+
     private async Task<ConversionResult?> ProcessQueueItemAsync(QueueItem item, int ordinal, int totalItems, CancellationToken cancellationToken)
     {
         var fileName = Path.GetFileName(item.InputPath);
+        if (item.RequiresManualFpsSelection || !item.HasResolvedFps)
+        {
+            SetQueueItemStatus(item, QueueItemStatus.Warning, "Needs FPS", "Choose Source FPS");
+            item.ResultStatusSummary = "Needs Source FPS";
+            technicalLog.Append($"Queue item blocked because Source FPS is not set. Input: {item.InputPath}");
+            return null;
+        }
+
         SetQueueItemStatus(item, QueueItemStatus.Probing, "Probing", "");
-        technicalLog.Append($"Queue item start. {ordinal} of {totalItems}; Input: {item.InputPath}; Planned output: {item.PlannedOutputPath}; Format: {item.OutputFormat.DisplayName()}; Mode: {FormatConversionModeForDisplay(item.ConversionMode)}; FPS: {item.Fps.Label} ({item.Fps.FfmpegValue}).");
+        technicalLog.Append($"Queue item start. {ordinal} of {totalItems}; Input: {item.InputPath}; Planned output: {item.PlannedOutputPath}; Format: {item.OutputFormat.DisplayName()}; Mode: {FormatConversionModeForDisplay(item.ConversionMode)}; FPS: {item.FpsDisplayLabel} ({item.FfmpegRateValue}).");
         RefreshStatusLog($"Processing {ordinal} of {totalItems}: {fileName}");
 
         var inputValidation = InputFileValidator.ValidateDatFile(item.InputPath);
         if (!inputValidation.IsValid)
         {
             SetQueueItemStatus(item, QueueItemStatus.Failed, "Failed", inputValidation.Message);
+            item.ResultStatusSummary = "Skipped - invalid output path";
             technicalLog.Append($"Queue item failed input revalidation. Input: {item.InputPath}; Reason: {inputValidation.Message}");
+            technicalLog.Append(QueueItemResultFormatter.BuildLogLine(item, ordinal, totalItems));
             return null;
         }
 
         var probeResult = await probeService.ProbeRawH264Async(item.InputPath, item.Fps, cancellationToken);
         if (cancellationToken.IsCancellationRequested)
         {
+            var canceledResult = new ConversionResult(false, ConversionResult.CanceledMessage, ffmpegTools.FfmpegPath, Array.Empty<string>(), item.InputPath, item.PlannedOutputPath, item.Fps, null, "", "", WasCanceled: true);
+            item.ConversionResult = canceledResult;
             SetQueueItemStatus(item, QueueItemStatus.Canceled, "Canceled", "");
             technicalLog.Append($"Queue item canceled during probe. Input: {item.InputPath}");
-            return new ConversionResult(false, ConversionResult.CanceledMessage, ffmpegTools.FfmpegPath, Array.Empty<string>(), item.InputPath, item.PlannedOutputPath, item.Fps, null, "", "", WasCanceled: true);
+            technicalLog.Append(QueueItemResultFormatter.BuildLogLine(item, ordinal, totalItems));
+            return canceledResult;
         }
 
         if (!probeResult.IsSuccess)
         {
+            item.PreProbeResult = probeResult;
+            item.ResultStatusSummary = "Skipped - unsupported video payload";
             SetQueueItemStatus(item, QueueItemStatus.Unsupported, "Unsupported", "Will not process");
             technicalLog.Append($"Queue item probe failed. Input: {item.InputPath}; Message: {ProbeResult.UnsupportedMessage}");
             technicalLog.AppendBlock("Queue item probe technical details", probeResult.TechnicalDetails);
+            technicalLog.Append(QueueItemResultFormatter.BuildLogLine(item, ordinal, totalItems));
             return null;
         }
 
         technicalLog.Append($"Queue item probe succeeded. Input: {item.InputPath}; Codec: {FormatOptionalValue(probeResult.CodecName, "unknown")}; Resolution: {FormatResolution(probeResult.Width, probeResult.Height)}; Duration: {FormatOptionalValue(probeResult.Duration, "unknown")}.");
+        item.PreProbeResult = probeResult;
 
         var outputSafety = RecheckQueueOutputSafety(item);
         if (!outputSafety.CanConvert)
         {
             SetQueueItemStatus(item, outputSafety.Status, outputSafety.StatusText, outputSafety.ProgressText);
+            item.ResultStatusSummary = outputSafety.Status == QueueItemStatus.Skipped
+                ? "Skipped - output already exists"
+                : "Skipped - invalid output path";
             technicalLog.Append($"Queue item skipped/failed output safety check. Input: {item.InputPath}; Reason: {outputSafety.LogMessage}");
+            technicalLog.Append(QueueItemResultFormatter.BuildLogLine(item, ordinal, totalItems));
             return null;
         }
 
@@ -1980,7 +2737,8 @@ public sealed class MainForm : Form
             ? await conversionService.EncodeAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, progress, cancellationToken)
             : await conversionService.RemuxAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, progress, cancellationToken);
 
-        AppendConversionResultToLog(conversionResult);
+        item.ConversionResult = conversionResult;
+        AppendConversionResultToLog(conversionResult, includeStatusSummary: false);
 
         if (conversionResult.IsSuccess)
         {
@@ -1999,13 +2757,56 @@ public sealed class MainForm : Form
             SetQueueItemStatus(item, QueueItemStatus.Failed, "Failed", "");
         }
 
+        technicalLog.Append(QueueItemResultFormatter.BuildLogLine(item, ordinal, totalItems));
         return conversionResult;
+    }
+
+    private async Task<ConversionResult?> ProbeQueueItemForReadinessDuringRunAsync(QueueItem item, CancellationToken cancellationToken)
+    {
+        var ordinal = queueItems.IndexOf(item) + 1;
+        var totalItems = queueItems.Count;
+        SetQueueItemStatus(item, QueueItemStatus.Probing, "Probing", "");
+        var probeFps = GetProbeFpsOption(item);
+        technicalLog.Append($"Queue validation probe item. Input: {item.InputPath}; FPS: {probeFps.Label} ({probeFps.FfmpegValue}){(item.HasResolvedFps ? "" : " probe-only")}.");
+
+        var probeResult = await probeService.ProbeRawH264Async(item.InputPath, probeFps, cancellationToken);
+        if (cancellationToken.IsCancellationRequested)
+        {
+            var canceledResult = new ConversionResult(false, ConversionResult.CanceledMessage, ffmpegTools.FfmpegPath, Array.Empty<string>(), item.InputPath, item.PlannedOutputPath, probeFps, null, "", "", WasCanceled: true);
+            item.ConversionResult = canceledResult;
+            SetQueueItemStatus(item, QueueItemStatus.Canceled, "Canceled", "");
+            technicalLog.Append($"Queue validation probe canceled. Input: {item.InputPath}");
+            technicalLog.Append(QueueItemResultFormatter.BuildLogLine(item, ordinal, totalItems));
+            return canceledResult;
+        }
+
+        QueueItemStatusService.ApplyPreProbeResult(item, probeResult);
+        RefreshQueueGrid();
+
+        if (probeResult.IsSuccess)
+        {
+            if (item.RequiresManualFpsSelection || !item.HasResolvedFps)
+            {
+                technicalLog.Append($"Queue validation probe succeeded; Source FPS still needs manual selection. Input: {item.InputPath}; Codec: {FormatOptionalValue(probeResult.CodecName, "unknown")}; Resolution: {FormatResolution(probeResult.Width, probeResult.Height)}; Profile: {FormatOptionalValue(probeResult.Profile, "unknown")}.");
+            }
+            else
+            {
+                technicalLog.Append($"Queue validation probe succeeded. Input: {item.InputPath}; Codec: {FormatOptionalValue(probeResult.CodecName, "unknown")}; Resolution: {FormatResolution(probeResult.Width, probeResult.Height)}; Profile: {FormatOptionalValue(probeResult.Profile, "unknown")}.");
+            }
+        }
+        else
+        {
+            technicalLog.Append($"Queue validation probe failed. Input: {item.InputPath}; Message: {ProbeResult.UnsupportedMessage}");
+            technicalLog.AppendBlock("Queue validation probe technical details", probeResult.TechnicalDetails);
+            technicalLog.Append(QueueItemResultFormatter.BuildLogLine(item, ordinal, totalItems));
+        }
+
+        return null;
     }
 
     private bool IsProcessableQueueItem(QueueItem item)
     {
-        return item.Status == QueueItemStatus.Ready ||
-               (item.Status == QueueItemStatus.Warning && item.PreProbeResult?.IsSuccess == true && !CustomOutputPathExists(item));
+        return QueueProcessingEligibilityService.IsProcessable(item, CustomOutputPathExists);
     }
 
     private static bool CustomOutputPathExists(QueueItem item)
@@ -2016,6 +2817,13 @@ public sealed class MainForm : Form
     private bool HasPendingQueueValidation()
     {
         return queueItems.Any(item => item.Status is QueueItemStatus.WaitingForProbe or QueueItemStatus.Probing);
+    }
+
+    private static FpsOption GetProbeFpsOption(QueueItem item)
+    {
+        return item.HasResolvedFps && !string.IsNullOrWhiteSpace(item.Fps.FfmpegValue)
+            ? item.Fps
+            : FpsOption.FromLabel("30");
     }
 
     private void SetQueueItemStatus(QueueItem item, QueueItemStatus status, string statusText, string progressText)
@@ -2150,6 +2958,29 @@ public sealed class MainForm : Form
             : $"Queue completed. Completed: {completed}, Failed: {failed}, Exists: {exists}, Canceled: {canceled}.";
     }
 
+    private string BuildQueueRunStatus(bool queueCanceled, bool stoppedAfterCurrent)
+    {
+        if (queueCanceled || stoppedAfterCurrent)
+        {
+            return "Canceled";
+        }
+
+        return queueItems.Any(item => item.Status is QueueItemStatus.Failed or QueueItemStatus.Invalid or QueueItemStatus.Unsupported)
+            ? "Failed"
+            : "Completed";
+    }
+
+    private string BuildQueueItemResultsSection()
+    {
+        var lines = new List<string> { "Queue item results:" };
+        for (var index = 0; index < queueItems.Count; index++)
+        {
+            lines.Add(QueueItemResultFormatter.BuildSummaryLine(queueItems[index], index + 1, queueItems.Count));
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
     private sealed record QueueOutputSafetyResult(
         bool CanConvert,
         string? OutputPath,
@@ -2177,11 +3008,8 @@ public sealed class MainForm : Form
     private sealed record FolderQueueAddPreview(
         IReadOnlyList<string> AddablePaths,
         int InvalidCount,
-        int DuplicateCount,
         int AlreadyConvertedSkippedCount,
         int OutputPlanFailedCount);
-
-    private sealed record QueueAddCandidate(string InputPath, string? DirectOutputPath);
 
     private async Task StartConversionAsync()
     {
@@ -2299,10 +3127,11 @@ public sealed class MainForm : Form
     {
         var allowQueueEditing = enabled || isQueueProcessing;
         browseFileButton.Enabled = allowQueueEditing && ffmpegTools.AreAvailable;
-        addFolderButton.Enabled = allowQueueEditing && ffmpegTools.AreAvailable;
+        addFolderButton.Enabled = enabled && ffmpegTools.AreAvailable && !isQueueProcessing;
         queueGridView.Enabled = allowQueueEditing;
         startQueueButton.Enabled = false;
         stopAfterCurrentButton.Enabled = false;
+        cancelQueueButton.Enabled = false;
         removeSelectedQueueItemButton.Enabled = false;
         clearCompletedQueueButton.Enabled = false;
         sameFolderRadioButton.Enabled = enabled;
@@ -2448,14 +3277,14 @@ public sealed class MainForm : Form
         currentStatusLabel.Font = string.Equals(headline, MissingToolsStatusMessage, StringComparison.Ordinal)
             ? boldStatusFont
             : normalStatusFont;
-        RefreshDetailsText();
+        RefreshDetailsText(DetailsScrollMode.Bottom);
     }
 
-    private void RefreshDetailsText()
+    private void RefreshDetailsText(DetailsScrollMode scrollMode = DetailsScrollMode.Preserve)
     {
         if (areDetailsVisible)
         {
-            SetDetailsText(BuildDetailsText());
+            SetDetailsText(BuildDetailsText(), scrollMode);
         }
     }
 
@@ -2468,8 +3297,6 @@ public sealed class MainForm : Form
 
         areDetailsVisible = visible;
         showDetailsButton.Text = visible ? "Hide Details" : "Show Details";
-        copyLogButton.Visible = visible;
-        clearLogButton.Visible = visible;
 
         if (detailsPanel is not null)
         {
@@ -2484,7 +3311,7 @@ public sealed class MainForm : Form
 
         if (visible)
         {
-            SetDetailsText(BuildDetailsText());
+            SetDetailsText(BuildDetailsText(), DetailsScrollMode.Bottom);
         }
 
         if (visible != wasVisible)
@@ -2499,95 +3326,176 @@ public sealed class MainForm : Form
 
     private string BuildDetailsText()
     {
-        var lines = new List<string>();
-        if (!ffmpegTools.AreAvailable && string.Equals(currentUserStatus, MissingToolsStatusMessage, StringComparison.Ordinal))
-        {
-            AddMessageLines(lines, MissingToolsDetailsMessage);
-            lines.Add(string.Empty);
-        }
-        else
-        {
-            lines.Add(currentUserStatus);
-            lines.Add(string.Empty);
-
-            if (!ffmpegTools.AreAvailable)
-            {
-                AddMessageLines(lines, MissingToolsDetailsMessage);
-                lines.Add(string.Empty);
-            }
-        }
-
-        lines.Add($"Input file: {FormatOptionalValue(selectionState.SelectedInputFilePath, "None selected")}");
-        lines.Add($"Queue items: {queueItems.Count}/100");
-        lines.Add($"Output destination: {FormatOutputDestinationMode(selectionState.OutputDestinationMode)}");
-        lines.Add($"Output folder: {FormatOptionalValue(selectionState.SelectedOutputFolderPath, selectionState.OutputDestinationMode == OutputDestinationMode.SameFolderAsSource ? "Same folder as source file" : "None selected")}");
-        lines.Add($"Planned output file: {FormatOptionalValue(selectionState.PlannedOutputFilePath, "Not planned yet")}");
-        if (selectionState.IsInputFileValid && !selectionState.IsOutputFolderValid && selectionState.OutputDestinationMode == OutputDestinationMode.SameFolderAsSource)
-        {
-            lines.Add("The source folder is not writable. Choose a different output folder.");
-        }
-
-        lines.Add($"Output format: {GetSelectedOutputFormat().DisplayName()}");
-        lines.Add($"Mode: {GetSelectedConversionModeForDisplay()}");
-        var fps = GetSelectedFpsOption();
-        lines.Add($"Selected source FPS: {fps.Label} (FFmpeg value: {fps.FfmpegValue})");
-        lines.Add($"Probe status: {FormatProbeStatus()}");
-        lines.Add($"Conversion status: {FormatConversionStatus()}");
-        AddDurationLines(lines);
-
-        if (selectionState.LastProbeResult is not null)
-        {
-            AddProbeResultLines(lines, selectionState.LastProbeResult);
-        }
-
-        if (lastConversionResult is not null)
-        {
-            AddConversionResultLines(lines, lastConversionResult);
-        }
-        else if (lastConversionProgress is not null)
-        {
-            AddCurrentProgressLines(lines, lastConversionProgress);
-        }
-
-        lines.Add(string.Empty);
-        lines.Add("Technical log:");
-        lines.Add(technicalLog.Text);
-
-        return string.Join(Environment.NewLine, lines);
+        return DetailsTextFormatter.BuildSectionedText(
+            BuildQueueSummaryLines(),
+            BuildSelectedItemLines(GetSelectedQueueItem()),
+            BuildQueueItemResultLines(),
+            technicalLog.Text);
     }
 
-    private void SetDetailsText(string text)
+    private QueueItem? GetSelectedQueueItem()
     {
-        statusLogTextBox.SuspendLayout();
+        return queueGridView.SelectedRows.Count > 0 &&
+               queueGridView.SelectedRows[0].Tag is QueueItem item &&
+               queueItems.Contains(item)
+            ? item
+            : null;
+    }
 
-        if (!ffmpegTools.AreAvailable &&
-            string.Equals(currentUserStatus, MissingToolsStatusMessage, StringComparison.Ordinal) &&
-            text.StartsWith(MissingToolsStatusMessage, StringComparison.Ordinal))
+    private void SelectQueueItem(QueueItem item)
+    {
+        foreach (DataGridViewRow row in queueGridView.Rows)
         {
-            statusLogTextBox.Clear();
-            statusLogTextBox.SelectionFont = boldStatusFont;
-            statusLogTextBox.AppendText(MissingToolsStatusMessage);
-            statusLogTextBox.SelectionFont = statusLogTextBox.Font;
-            statusLogTextBox.AppendText(Environment.NewLine);
-            statusLogTextBox.AppendText(MissingToolsExplanationMessage);
-
-            var remainingText = text[MissingToolsDetailsMessage.Length..].TrimStart('\r', '\n');
-            if (!string.IsNullOrWhiteSpace(remainingText))
+            if (ReferenceEquals(row.Tag, item))
             {
-                statusLogTextBox.AppendText(Environment.NewLine);
-                statusLogTextBox.AppendText(Environment.NewLine);
-                statusLogTextBox.AppendText(remainingText);
+                row.Selected = true;
+                queueGridView.CurrentCell = row.Cells[0];
+                break;
             }
         }
-        else
+    }
+
+    private void ClearQueueSelection()
+    {
+        if (queueGridView.SelectedRows.Count == 0 && queueGridView.CurrentCell is null)
         {
-            statusLogTextBox.Text = text;
-            statusLogTextBox.SelectAll();
-            statusLogTextBox.SelectionFont = statusLogTextBox.Font;
+            return;
         }
 
-        statusLogTextBox.Select(0, 0);
-        statusLogTextBox.ResumeLayout();
+        queueGridView.ClearSelection();
+        queueGridView.CurrentCell = null;
+        UpdateQueueButtonState();
+        RefreshDetailsText(DetailsScrollMode.Preserve);
+    }
+
+    private List<string> BuildQueueSummaryLines()
+    {
+        var completed = queueItems.Count(item => item.Status == QueueItemStatus.Completed);
+        var failed = queueItems.Count(item => item.Status is QueueItemStatus.Failed or QueueItemStatus.Invalid or QueueItemStatus.Unsupported);
+        var exists = queueItems.Count(item => item.Status == QueueItemStatus.Skipped);
+        var canceled = queueItems.Count(item => item.Status == QueueItemStatus.Canceled);
+        var settings = lastQueueRunSettings is not null
+            ? $"{FormatQueueSettings(lastQueueRunSettings)} | Destination: {FormatOutputDestinationMode(lastQueueRunSettings.OutputDestinationMode)}"
+            : $"{FormatQueueSettings(CaptureCurrentQueueSettings())} | Destination: {FormatOutputDestinationMode(selectionState.OutputDestinationMode)}";
+
+        var lines = new List<string>
+        {
+            $"Status: {(isQueueProcessing ? "Running" : lastQueueRunStatus)}",
+            $"Completed: {completed}",
+            $"Failed: {failed}",
+            $"Exists: {exists}",
+            $"Canceled: {canceled}",
+            $"Total queued: {queueItems.Count}",
+            $"Settings: {settings}"
+        };
+
+        if (!ffmpegTools.AreAvailable)
+        {
+            lines.Add(MissingToolsStatusMessage);
+            lines.Add(MissingToolsExplanationMessage);
+        }
+
+        return lines;
+    }
+
+    private List<string> BuildSelectedItemLines(QueueItem? item)
+    {
+        return SelectedItemDetailsFormatter.BuildLines(item);
+    }
+
+    private List<string> BuildQueueItemResultLines()
+    {
+        if (queueItems.Count == 0)
+        {
+            return new List<string> { "No queued items." };
+        }
+
+        var lines = new List<string>();
+        for (var index = 0; index < queueItems.Count; index++)
+        {
+            lines.Add(QueueItemResultFormatter.BuildSummaryLine(queueItems[index], index + 1, queueItems.Count));
+        }
+
+        return lines;
+    }
+
+    private void SetDetailsText(string text, DetailsScrollMode scrollMode)
+    {
+        var displayText = DetailsTextFormatter.AddVisualBottomPadding(text);
+        var wasAtBottom = IsDetailsScrolledToBottom();
+        var scrollPosition = GetDetailsScrollPosition();
+        var preserveSelection = statusLogTextBox.Focused && statusLogTextBox.SelectionLength > 0;
+        var selectionStart = statusLogTextBox.SelectionStart;
+        var selectionLength = statusLogTextBox.SelectionLength;
+
+        statusLogTextBox.SuspendLayout();
+        SetDetailsRedraw(enabled: false);
+
+        try
+        {
+            statusLogTextBox.Text = displayText;
+
+            if (preserveSelection)
+            {
+                statusLogTextBox.Select(
+                    Math.Min(selectionStart, statusLogTextBox.TextLength),
+                    Math.Min(selectionLength, Math.Max(0, statusLogTextBox.TextLength - selectionStart)));
+            }
+            else if (scrollMode == DetailsScrollMode.Bottom || wasAtBottom)
+            {
+                statusLogTextBox.Select(statusLogTextBox.TextLength, 0);
+            }
+
+            if (scrollMode == DetailsScrollMode.Bottom || wasAtBottom)
+            {
+                ScrollDetailsToBottom();
+            }
+            else
+            {
+                SetDetailsScrollPosition(scrollPosition);
+            }
+        }
+        finally
+        {
+            SetDetailsRedraw(enabled: true);
+            statusLogTextBox.ResumeLayout();
+            statusLogTextBox.Invalidate();
+        }
+    }
+
+    private bool IsDetailsScrolledToBottom()
+    {
+        if (statusLogTextBox.TextLength == 0)
+        {
+            return true;
+        }
+
+        var lastCharacterPosition = statusLogTextBox.GetPositionFromCharIndex(statusLogTextBox.TextLength);
+        return lastCharacterPosition.Y <= statusLogTextBox.ClientSize.Height;
+    }
+
+    private Point GetDetailsScrollPosition()
+    {
+        var point = new NativePoint();
+        SendMessage(statusLogTextBox.Handle, EmGetScrollPos, IntPtr.Zero, ref point);
+        return new Point(point.X, point.Y);
+    }
+
+    private void SetDetailsScrollPosition(Point position)
+    {
+        var point = new NativePoint(position.X, position.Y);
+        SendMessage(statusLogTextBox.Handle, EmSetScrollPos, IntPtr.Zero, ref point);
+    }
+
+    private void ScrollDetailsToBottom()
+    {
+        statusLogTextBox.Select(statusLogTextBox.TextLength, 0);
+        statusLogTextBox.ScrollToCaret();
+    }
+
+    private void SetDetailsRedraw(bool enabled)
+    {
+        SendMessage(statusLogTextBox.Handle, WmSetRedraw, enabled ? new IntPtr(1) : IntPtr.Zero, IntPtr.Zero);
     }
 
     private void UpdateConvertButtonState()
@@ -2605,6 +3513,11 @@ public sealed class MainForm : Form
     private OutputFormat GetSelectedOutputFormat()
     {
         return OutputFormatExtensions.Parse(outputFormatComboBox.SelectedItem?.ToString());
+    }
+
+    private static OutputFormat ParseOutputFormatDisplay(string? value)
+    {
+        return OutputFormatExtensions.Parse(value);
     }
 
     private string GetSelectedConversionMode()
@@ -2634,12 +3547,52 @@ public sealed class MainForm : Form
 
     private string GetSelectedFrameRate()
     {
-        return frameRateComboBox.SelectedItem?.ToString() ?? "30";
+        return frameRateComboBox.SelectedItem?.ToString() ?? AutoDetectFpsLabel;
     }
 
     private FpsOption GetSelectedFpsOption()
     {
+        if (IsAutoDetectFps(GetSelectedFrameRate()))
+        {
+            return FpsOption.FromLabel("30");
+        }
+
         return FpsOption.FromLabel(GetSelectedFrameRate());
+    }
+
+    private QueueItemFpsSettings GetSelectedFpsSettings()
+    {
+        var selected = GetSelectedFrameRate();
+        return IsAutoDetectFps(selected)
+            ? QueueItemFpsSettings.AutoDetect()
+            : QueueItemFpsSettings.FromManual(FpsOption.FromLabel(selected));
+    }
+
+    private static QueueItemFpsSettings BuildFpsSettingsFromDisplay(string? selected)
+    {
+        return IsAutoDetectFps(selected)
+            ? QueueItemFpsSettings.AutoDetect()
+            : QueueItemFpsSettings.FromManual(FpsOption.FromLabel(selected));
+    }
+
+    private static string FormatFpsSettingForEditor(QueueItemFpsSettings settings)
+    {
+        return settings.SelectionMode == FpsSelectionMode.AutoDetect
+            ? AutoDetectFpsLabel
+            : settings.RequestedDisplayValue;
+    }
+
+    private static bool AreFpsSettingsEquivalent(QueueItemFpsSettings left, QueueItemFpsSettings right)
+    {
+        return left.SelectionMode == right.SelectionMode &&
+               string.Equals(left.RequestedDisplayValue, right.RequestedDisplayValue, StringComparison.Ordinal) &&
+               string.Equals(left.ManualFfmpegRateValue, right.ManualFfmpegRateValue, StringComparison.Ordinal);
+    }
+
+    private static bool IsAutoDetectFps(string? value)
+    {
+        return string.Equals(value, AutoDetectFpsLabel, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(value, "Auto", StringComparison.OrdinalIgnoreCase);
     }
 
     private static OutputDestinationMode ParseOutputDestinationMode(string? value)
@@ -2665,7 +3618,7 @@ public sealed class MainForm : Form
         appSettings.LastChosenOutputFolder = selectionState.ChosenOutputFolderPath ?? string.Empty;
         appSettings.OutputFormat = GetSelectedOutputFormat().DisplayName();
         appSettings.ConversionMode = GetSelectedConversionMode();
-        appSettings.Fps = GetSelectedFpsOption().Label;
+        appSettings.Fps = GetSelectedFrameRate();
         appSettings.WindowWidth = DefaultClientWidth;
         appSettings.WindowHeight = DefaultClientHeight;
 
@@ -2710,6 +3663,54 @@ public sealed class MainForm : Form
         return "Idle";
     }
 
+    private static string FormatQueueItemProbeStatus(QueueItem item)
+    {
+        if (item.Status == QueueItemStatus.Probing)
+        {
+            return "Running";
+        }
+
+        return item.PreProbeResult is null
+            ? "Not validated"
+            : item.PreProbeResult.IsSuccess ? "Succeeded" : "Failed";
+    }
+
+    private static string FormatQueueItemConversionStatus(QueueItem item)
+    {
+        return item.Status switch
+        {
+            QueueItemStatus.Converting => "Running",
+            QueueItemStatus.Completed => "Completed",
+            QueueItemStatus.Canceled => "Canceled",
+            QueueItemStatus.Failed or QueueItemStatus.Invalid => "Failed",
+            QueueItemStatus.Unsupported => "Skipped",
+            QueueItemStatus.Skipped => "Skipped",
+            _ => "Not started"
+        };
+    }
+
+    private static string FormatQueueItemFpsNote(QueueItem item)
+    {
+        if (item.RequiresManualFpsSelection || !item.HasResolvedFps)
+        {
+            return item.FpsValidationMessage ?? "Auto-detect could not determine the source FPS. Double-click this row and choose Source FPS.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.FpsWarning))
+        {
+            return item.FpsWarning;
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.FpsDecisionReason))
+        {
+            return item.FpsDecisionReason;
+        }
+
+        return item.FpsSelectionMode == FpsSelectionMode.AutoDetect
+            ? "Detected from Mirasys frame records."
+            : "Manual FPS selection.";
+    }
+
     private static void AddProbeResultLines(List<string> lines, ProbeResult result)
     {
         lines.Add("Probe details:");
@@ -2732,9 +3733,34 @@ public sealed class MainForm : Form
         }
     }
 
+    private static void AddQueueItemDetailsLines(List<string> lines, QueueItem item)
+    {
+        lines.Add("Selected queue item:");
+        lines.Add($"Status: {QueueItemResultFormatter.GetStatusSummary(item)}");
+        lines.Add($"Input: {item.InputPath}");
+        lines.Add($"Output: {QueueItemResultFormatter.GetOutputSummary(item)}");
+        lines.Add($"Output format: {item.OutputFormat.DisplayName()}");
+        lines.Add($"Mode: {FormatConversionModeForDisplay(item.ConversionMode)}");
+        lines.Add($"Selected source FPS: {(item.RequiresManualFpsSelection || !item.HasResolvedFps ? "Needs manual selection" : item.FpsDisplayLabel)}");
+        lines.Add($"FFmpeg FPS value: {(item.RequiresManualFpsSelection || !item.HasResolvedFps ? "Not set" : item.FfmpegRateValue)}");
+        lines.Add($"FPS confidence: {FormatOptionalValue(item.RequiresManualFpsSelection || !item.HasResolvedFps ? "Unavailable" : item.FpsConfidence, "Unknown")}");
+        lines.Add($"FPS note: {FormatQueueItemFpsNote(item)}");
+
+        if (item.PreProbeResult is not null)
+        {
+            AddProbeResultLines(lines, item.PreProbeResult);
+        }
+
+        if (item.ConversionResult is not null)
+        {
+            AddConversionResultLines(lines, item.ConversionResult);
+        }
+    }
+
     private static void AddConversionResultLines(List<string> lines, ConversionResult result)
     {
         lines.Add("Conversion details:");
+        lines.Add(result.StatusSummary);
         lines.Add($"Tool path: {result.FfmpegPath}");
         lines.Add($"Command: {result.CommandLine}");
         lines.Add($"Mode: {FormatConversionModeForDisplay(result.ConversionMode)}");
@@ -2784,9 +3810,18 @@ public sealed class MainForm : Form
         }
     }
 
-    private void AppendConversionResultToLog(ConversionResult result)
+    private void AppendQueueItemFpsTechnicalLog(QueueItem item, string title)
     {
-        technicalLog.Append($"Conversion {(result.IsSuccess ? "succeeded" : result.WasCanceled ? "canceled" : "failed")}. Mode: {FormatConversionModeForDisplay(result.ConversionMode)}; Format: {result.OutputFormat}; Output: {result.OutputPath}; Exit code: {FormatExitCode(result.ExitCode)}; Canceled: {FormatYesNo(result.WasCanceled)}; Timed out: {FormatYesNo(result.TimedOut)}; Duration available: {FormatYesNo(result.Duration.HasValue)}; Progress mode: {(result.UsedDeterminateProgress ? "Determinate" : "Indeterminate")}.");
+        if (!string.IsNullOrWhiteSpace(item.FpsTechnicalLogText))
+        {
+            technicalLog.AppendBlock(title, item.FpsTechnicalLogText);
+        }
+    }
+
+    private void AppendConversionResultToLog(ConversionResult result, bool includeStatusSummary = true)
+    {
+        var statusPrefix = includeStatusSummary ? $"{result.StatusSummary}. " : "Conversion details. ";
+        technicalLog.Append($"{statusPrefix}Mode: {FormatConversionModeForDisplay(result.ConversionMode)}; Format: {result.OutputFormat}; Output: {result.OutputPath}; Exit code: {FormatExitCode(result.ExitCode)}; Canceled: {FormatYesNo(result.WasCanceled)}; Timed out: {FormatYesNo(result.TimedOut)}; Duration available: {FormatYesNo(result.Duration.HasValue)}; Progress mode: {(result.UsedDeterminateProgress ? "Determinate" : "Indeterminate")}.");
         technicalLog.Append($"FFmpeg command: {result.CommandLine}");
         if (IsMp4RemuxResult(result))
         {
@@ -2897,7 +3932,7 @@ public sealed class MainForm : Form
 
             if (result == DialogResult.Yes)
             {
-                CancelButton_Click(this, EventArgs.Empty);
+                CancelQueueButton_Click(this, EventArgs.Empty);
             }
 
             return;
@@ -2905,6 +3940,19 @@ public sealed class MainForm : Form
 
         SaveCurrentSettings();
         base.OnFormClosing(e);
+    }
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+
+        if (deferredStartupCompleted)
+        {
+            return;
+        }
+
+        deferredStartupCompleted = true;
+        BeginInvoke(new Action(CompleteDeferredStartupUiWork));
     }
 
     protected override void Dispose(bool disposing)
@@ -2918,6 +3966,31 @@ public sealed class MainForm : Form
         }
 
         base.Dispose(disposing);
+    }
+
+    private void CompleteDeferredStartupUiWork()
+    {
+        LoadHeaderLogoIfAvailable();
+        RegisterQueueDeselectHandlers(this);
+        ApplyQueueAutoFitColumnWidths();
+        startupStopwatch.Stop();
+        technicalLog.Append($"Startup UI finalized after first paint. Elapsed: {startupStopwatch.ElapsedMilliseconds} ms.");
+    }
+
+    private void LoadHeaderLogoIfAvailable()
+    {
+        if (headerLogoPictureBox is null || headerLogoPictureBox.Image is not null)
+        {
+            return;
+        }
+
+        var logoImage = TryLoadHeaderLogo();
+        if (logoImage is null)
+        {
+            return;
+        }
+
+        headerLogoPictureBox.Image = logoImage;
     }
 
     private Control BuildLayout()
@@ -2971,18 +4044,13 @@ public sealed class MainForm : Form
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        var logoImage = TryLoadHeaderLogo();
-        if (logoImage is not null)
+        headerLogoPictureBox = new PictureBox
         {
-            var logoBox = new PictureBox
-            {
-                Dock = DockStyle.Fill,
-                Image = logoImage,
-                SizeMode = PictureBoxSizeMode.Zoom,
-                Margin = new Padding(0, 2, 10, 4)
-            };
-            panel.Controls.Add(logoBox, 0, 0);
-        }
+            Dock = DockStyle.Fill,
+            SizeMode = PictureBoxSizeMode.Zoom,
+            Margin = new Padding(0, 2, 10, 4)
+        };
+        panel.Controls.Add(headerLogoPictureBox, 0, 0);
 
         var headerLabel = new Label
         {
@@ -3064,7 +4132,7 @@ public sealed class MainForm : Form
         var groupBox = new GroupBox
         {
             Dock = DockStyle.Fill,
-            Text = "Options",
+            Text = "Batch Options",
             Padding = new Padding(14, 28, 14, 14)
         };
 
@@ -3139,8 +4207,8 @@ public sealed class MainForm : Form
         }
 
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        AddActionButtonToGrid(panel, copyLogButton, 0);
-        AddActionButtonToGrid(panel, clearLogButton, 1);
+        AddActionButtonToGrid(panel, removeSelectedQueueItemButton, 0);
+        AddActionButtonToGrid(panel, clearCompletedQueueButton, 1);
         panel.Controls.Add(new Panel { Dock = DockStyle.Fill }, 2, 0);
         AddActionButtonToGrid(panel, showDetailsButton, 3);
         AddActionButtonToGrid(panel, openOutputFolderButton, 4);
@@ -3163,10 +4231,10 @@ public sealed class MainForm : Form
         }
 
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        AddActionButtonToGrid(panel, removeSelectedQueueItemButton, 0);
-        AddActionButtonToGrid(panel, clearCompletedQueueButton, 1);
-        AddActionButtonToGrid(panel, stopAfterCurrentButton, 2);
-        AddActionButtonToGrid(panel, cancelButton, 3);
+        AddActionButtonToGrid(panel, cancelButton, 0);
+        AddActionButtonToGrid(panel, stopAfterCurrentButton, 1);
+        panel.Controls.Add(new Panel { Dock = DockStyle.Fill }, 2, 0);
+        AddActionButtonToGrid(panel, cancelQueueButton, 3);
         AddActionButtonToGrid(panel, startQueueButton, 4);
         return panel;
     }
@@ -3184,14 +4252,38 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 1,
+            RowCount = 2,
             Margin = new Padding(0)
         };
         panel.SuspendLayout();
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
 
         panel.Controls.Add(statusLogTextBox, 0, 0);
+        panel.Controls.Add(BuildDetailsButtonPanel(), 0, 1);
         panel.ResumeLayout(false);
+        return panel;
+    }
+
+    private Control BuildDetailsButtonPanel()
+    {
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 4,
+            RowCount = 1,
+            Padding = new Padding(0, 4, 0, 4)
+        };
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 166));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 148));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 148));
+        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        AddActionButtonToGrid(panel, wordWrapButton, 0);
+        panel.Controls.Add(new Panel { Dock = DockStyle.Fill }, 1, 0);
+        AddActionButtonToGrid(panel, clearLogButton, 2);
+        AddActionButtonToGrid(panel, copyLogButton, 3);
         return panel;
     }
 
@@ -3255,6 +4347,23 @@ public sealed class MainForm : Form
         };
     }
 
+    private void RegisterQueueDeselectHandlers(Control control)
+    {
+        if (ReferenceEquals(control, queueGridView) ||
+            ReferenceEquals(control, openOutputFolderButton) ||
+            ReferenceEquals(control, detailsPanel) ||
+            ReferenceEquals(control, copyLogButton))
+        {
+            return;
+        }
+
+        control.MouseDown += OutsideQueueControl_MouseDown;
+        foreach (Control child in control.Controls)
+        {
+            RegisterQueueDeselectHandlers(child);
+        }
+    }
+
     private static ComboBox CreateComboBox(string[] items, string selectedItem)
     {
         var comboBox = new ComboBox
@@ -3266,6 +4375,10 @@ public sealed class MainForm : Form
 
         comboBox.Items.AddRange(items);
         comboBox.SelectedItem = selectedItem;
+        if (comboBox.SelectedIndex < 0 && comboBox.Items.Count > 0)
+        {
+            comboBox.SelectedIndex = 0;
+        }
         return comboBox;
     }
 
@@ -3278,16 +4391,18 @@ public sealed class MainForm : Form
             AllowUserToResizeRows = false,
             AllowUserToResizeColumns = true,
             AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.None,
+            AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None,
             BackgroundColor = SystemColors.Window,
             BorderStyle = BorderStyle.FixedSingle,
-            ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
+            ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
             Dock = DockStyle.Fill,
             MultiSelect = true,
             ReadOnly = true,
             RowHeadersVisible = false,
-            ScrollBars = ScrollBars.Both,
+            ScrollBars = ScrollBars.Vertical,
             SelectionMode = DataGridViewSelectionMode.FullRowSelect
         };
+        gridView.RowTemplate.Height = 28;
 
         gridView.Columns.Add(CreateQueueColumn("Status", "Status", QueueStatusColumnWidth));
         gridView.Columns.Add(CreateQueueColumn("File", "File", QueueFileColumnWidth));

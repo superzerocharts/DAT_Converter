@@ -65,7 +65,7 @@ public sealed class QueueItemRefreshServiceTests
         Assert.Equal("30000/1001", item.Fps.FfmpegValue);
         Assert.Null(item.PreProbeResult);
         Assert.Equal(QueueItemStatus.WaitingForProbe, item.Status);
-        Assert.Equal("Waiting for probe", item.StatusText);
+        Assert.Equal(QueueItemStatusText.CheckingFile, item.StatusText);
     }
 
     [Fact]
@@ -166,7 +166,250 @@ public sealed class QueueItemRefreshServiceTests
         Assert.Equal(OutputFormat.Mp4, completed.OutputFormat);
     }
 
-    private static QueueRefreshResult Refresh(IReadOnlyList<QueueItem> items, QueueSettingsSnapshot settings)
+    [Fact]
+    public void FpsSettingsChangeBeforeStartRefreshesEditableItemFps()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = CreateFile(temp.Path, "clip.dat");
+        var item = CreateReadyItem(inputPath, Path.Combine(temp.Path, "clip.mp4"), OutputFormat.Mp4);
+        var settings = CurrentSettings(OutputFormat.Mp4, fps: FpsOption.FromLabel("25"));
+
+        Refresh([item], settings);
+
+        Assert.Equal("25", item.FpsDisplayLabel);
+        Assert.Equal("25", item.FfmpegRateValue);
+        Assert.Equal("25", item.Fps.FfmpegValue);
+        Assert.Null(item.PreProbeResult);
+        Assert.Equal(QueueItemStatus.WaitingForProbe, item.Status);
+    }
+
+    [Fact]
+    public void AutoFpsFailureBeforeStartMarksEditableItemNeedsFps()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = CreateFile(temp.Path, "clip.dat");
+        var item = CreateReadyItem(inputPath, Path.Combine(temp.Path, "clip.mp4"), OutputFormat.Mp4);
+        var settings = CurrentSettings(OutputFormat.Mp4) with
+        {
+            FpsSettings = QueueItemFpsSettings.AutoDetect()
+        };
+
+        Refresh(
+            [item],
+            settings,
+            _ => UnresolvedAutoFps());
+
+        Assert.False(item.HasResolvedFps);
+        Assert.True(item.RequiresManualFpsSelection);
+        Assert.Equal("Needs manual selection", item.FpsDisplayLabel);
+        Assert.Equal("", item.FfmpegRateValue);
+        Assert.Null(item.PreProbeResult);
+        Assert.Equal(QueueItemStatus.Warning, item.Status);
+        Assert.Equal("Needs FPS", item.StatusText);
+        Assert.Equal("Choose Source FPS", item.ProgressText);
+    }
+
+    [Fact]
+    public void AutoFpsFailureWithExistingOutputKeepsExistsAsPrimaryStatus()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = CreateFile(temp.Path, "clip.dat");
+        var outputPath = Path.Combine(temp.Path, "clip.mp4");
+        File.WriteAllText(outputPath, "existing output");
+        var item = CreateReadyItem(inputPath, outputPath, OutputFormat.Mp4);
+        var settings = CurrentSettings(OutputFormat.Mp4) with
+        {
+            FpsSettings = QueueItemFpsSettings.AutoDetect()
+        };
+
+        Refresh(
+            [item],
+            settings,
+            _ => UnresolvedAutoFps());
+
+        Assert.False(item.HasResolvedFps);
+        Assert.True(item.RequiresManualFpsSelection);
+        Assert.True(item.HasExistingDirectOutput);
+        Assert.Equal(QueueItemStatus.Skipped, item.Status);
+        Assert.Equal("Exists", item.StatusText);
+        Assert.Equal("Selected output exists", item.ProgressText);
+    }
+
+    [Fact]
+    public void ManualGlobalFpsResolvesNonCustomUnresolvedItemBeforeStart()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = CreateFile(temp.Path, "clip.dat");
+        var item = CreateReadyItem(inputPath, Path.Combine(temp.Path, "clip.mp4"), OutputFormat.Mp4);
+        item.ApplyFpsResolution(QueueItemFpsSettings.AutoDetect(), UnresolvedAutoFps());
+        item.Status = QueueItemStatus.Warning;
+        item.StatusText = "Needs FPS";
+
+        Refresh([item], CurrentSettings(OutputFormat.Mp4, fps: FpsOption.FromLabel("30")));
+
+        Assert.True(item.HasResolvedFps);
+        Assert.False(item.RequiresManualFpsSelection);
+        Assert.Equal("30", item.FpsDisplayLabel);
+        Assert.Equal("30", item.FfmpegRateValue);
+        Assert.Equal(QueueItemStatus.WaitingForProbe, item.Status);
+    }
+
+    [Fact]
+    public void CustomUnresolvedFpsIsNotOverwrittenByGlobalManualFps()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = CreateFile(temp.Path, "clip.dat");
+        var item = CreateReadyItem(inputPath, Path.Combine(temp.Path, "clip.mp4"), OutputFormat.Mp4);
+        item.ApplyFpsResolution(QueueItemFpsSettings.AutoDetect(), UnresolvedAutoFps());
+        item.HasCustomFpsSetting = true;
+        item.Status = QueueItemStatus.Warning;
+        item.StatusText = "Needs FPS";
+
+        Refresh([item], CurrentSettings(OutputFormat.Mp4, fps: FpsOption.FromLabel("30")), _ => UnresolvedAutoFps());
+
+        Assert.False(item.HasResolvedFps);
+        Assert.True(item.RequiresManualFpsSelection);
+        Assert.Equal("Needs FPS", item.StatusText);
+    }
+
+    [Fact]
+    public void AutoFpsSettingsRefreshEditableItemsIndependently()
+    {
+        using var temp = new TempDirectory();
+        var firstPath = CreateFile(temp.Path, "first.dat");
+        var secondPath = CreateFile(temp.Path, "second.dat");
+        var first = CreateReadyItem(firstPath, Path.Combine(temp.Path, "first.mp4"), OutputFormat.Mp4);
+        var second = CreateReadyItem(secondPath, Path.Combine(temp.Path, "second.mp4"), OutputFormat.Mp4);
+        var settings = CurrentSettings(OutputFormat.Mp4) with
+        {
+            FpsSettings = QueueItemFpsSettings.AutoDetect()
+        };
+
+        Refresh(
+            [first, second],
+            settings,
+            item => new QueueItemFpsResolution
+            {
+                SelectionMode = FpsSelectionMode.AutoDetect,
+                DisplayLabel = item.InputPath.Contains("first", StringComparison.OrdinalIgnoreCase) ? "Auto 30" : "Auto 25",
+                FfmpegRateValue = item.InputPath.Contains("first", StringComparison.OrdinalIgnoreCase) ? "30" : "25",
+                NominalConversionFps = item.InputPath.Contains("first", StringComparison.OrdinalIgnoreCase) ? 30 : 25,
+                AutoDetectionSucceeded = true,
+                Confidence = "High"
+            });
+
+        Assert.Equal("30", first.FfmpegRateValue);
+        Assert.Equal("25", second.FfmpegRateValue);
+        Assert.Equal("Auto 30", first.FpsDisplayLabel);
+        Assert.Equal("Auto 25", second.FpsDisplayLabel);
+    }
+
+    [Fact]
+    public void LockedItemsDoNotRefreshFpsWhenSettingsChange()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = CreateFile(temp.Path, "clip.dat");
+        var running = CreateReadyItem(inputPath, Path.Combine(temp.Path, "clip.mp4"), OutputFormat.Mp4);
+        running.Status = QueueItemStatus.Converting;
+        var completed = CreateReadyItem(inputPath, Path.Combine(temp.Path, "clip_01.mp4"), OutputFormat.Mp4);
+        completed.Status = QueueItemStatus.Completed;
+
+        Refresh([running, completed], CurrentSettings(OutputFormat.Mp4, fps: FpsOption.FromLabel("25")));
+
+        Assert.Equal("30", running.FfmpegRateValue);
+        Assert.Equal("30", completed.FfmpegRateValue);
+    }
+
+    [Fact]
+    public void GlobalFormatChangeDoesNotOverwriteCustomFormat()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = CreateFile(temp.Path, "clip.dat");
+        var item = CreateReadyItem(inputPath, Path.Combine(temp.Path, "clip.mkv"), OutputFormat.Mkv);
+        item.HasCustomFormat = true;
+
+        Refresh([item], CurrentSettings(OutputFormat.Mp4));
+
+        Assert.Equal(OutputFormat.Mkv, item.OutputFormat);
+        Assert.Equal(Path.Combine(temp.Path, "clip.mkv"), item.PlannedOutputPath);
+    }
+
+    [Fact]
+    public void GlobalModeChangeDoesNotOverwriteCustomMode()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = CreateFile(temp.Path, "clip.dat");
+        var item = CreateReadyItem(inputPath, Path.Combine(temp.Path, "clip.mp4"), OutputFormat.Mp4);
+        item.ConversionMode = "Encode";
+        item.HasCustomMode = true;
+
+        Refresh([item], CurrentSettings(OutputFormat.Mp4, conversionMode: "Remux"));
+
+        Assert.Equal("Encode", item.ConversionMode);
+    }
+
+    [Fact]
+    public void GlobalFpsChangeDoesNotOverwriteCustomFps()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = CreateFile(temp.Path, "clip.dat");
+        var item = CreateReadyItem(inputPath, Path.Combine(temp.Path, "clip.mp4"), OutputFormat.Mp4);
+        item.ApplyFpsResolution(
+            QueueItemFpsSettings.FromManual(FpsOption.FromLabel("29.97")),
+            QueueItemFpsResolution.FromManual(FpsOption.FromLabel("29.97")));
+        item.HasCustomFpsSetting = true;
+
+        Refresh([item], CurrentSettings(OutputFormat.Mp4, fps: FpsOption.FromLabel("25")));
+
+        Assert.Equal("29.97", item.FpsDisplayLabel);
+        Assert.Equal("30000/1001", item.FfmpegRateValue);
+        Assert.Equal("30000/1001", item.Fps.FfmpegValue);
+    }
+
+    [Fact]
+    public void GlobalOutputFolderChangeDoesNotOverwriteCustomOutputPath()
+    {
+        using var temp = new TempDirectory();
+        var inputFolder = Path.Combine(temp.Path, "input");
+        var outputFolder = Path.Combine(temp.Path, "output");
+        var otherOutputFolder = Path.Combine(temp.Path, "other-output");
+        Directory.CreateDirectory(inputFolder);
+        Directory.CreateDirectory(outputFolder);
+        Directory.CreateDirectory(otherOutputFolder);
+        var inputPath = CreateFile(inputFolder, "clip.dat");
+        var customOutputPath = Path.Combine(outputFolder, "custom.mp4");
+        var item = CreateReadyItem(inputPath, customOutputPath, OutputFormat.Mp4);
+        item.CustomOutputPath = customOutputPath;
+        item.HasCustomOutputPath = true;
+
+        Refresh([item], CurrentSettings(
+            OutputFormat.Mp4,
+            outputDestinationMode: OutputDestinationMode.ChooseOutputFolder,
+            chosenOutputFolder: otherOutputFolder));
+
+        Assert.Equal(customOutputPath, item.CustomOutputPath);
+        Assert.Equal(customOutputPath, item.PlannedOutputPath);
+    }
+
+    [Fact]
+    public void NonCustomItemStillRefreshesFromGlobalSettings()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = CreateFile(temp.Path, "clip.dat");
+        var item = CreateReadyItem(inputPath, Path.Combine(temp.Path, "clip.mp4"), OutputFormat.Mp4);
+
+        Refresh([item], CurrentSettings(OutputFormat.Mkv, conversionMode: "Encode", fps: FpsOption.FromLabel("25")));
+
+        Assert.Equal(OutputFormat.Mkv, item.OutputFormat);
+        Assert.Equal("Encode", item.ConversionMode);
+        Assert.Equal("25", item.FfmpegRateValue);
+        Assert.Equal(Path.Combine(temp.Path, "clip.mkv"), item.PlannedOutputPath);
+    }
+
+    private static QueueRefreshResult Refresh(
+        IReadOnlyList<QueueItem> items,
+        QueueSettingsSnapshot settings,
+        Func<QueueItem, QueueItemFpsResolution>? resolveFps = null)
     {
         return QueueItemRefreshService.RefreshEditableItems(
             items,
@@ -175,7 +418,8 @@ public sealed class QueueItemRefreshServiceTests
                 ? Path.GetDirectoryName(item.InputPath)
                 : refreshSettings.ChosenOutputFolder,
             (item, outputFolderPath, outputFormat) => PlanQueueOutputPath(items, item, outputFolderPath, outputFormat),
-            (item, outputFolderPath, outputFormat) => GetDirectOutputPath(item, outputFolderPath, outputFormat));
+            (item, outputFolderPath, outputFormat) => GetDirectOutputPath(item, outputFolderPath, outputFormat),
+            resolveFps is null ? null : (item, _) => resolveFps(item));
     }
 
     private static string? PlanQueueOutputPath(IReadOnlyList<QueueItem> items, QueueItem item, string outputFolderPath, OutputFormat outputFormat)
@@ -252,6 +496,22 @@ public sealed class QueueItemRefreshServiceTests
             Status = hasExistingDirectOutput ? QueueItemStatus.Skipped : QueueItemStatus.Ready,
             StatusText = hasExistingDirectOutput ? "Exists" : "Ready",
             ProgressText = hasExistingDirectOutput ? "Selected output exists" : "1920x1080"
+        };
+    }
+
+    private static QueueItemFpsResolution UnresolvedAutoFps()
+    {
+        return new QueueItemFpsResolution
+        {
+            SelectionMode = FpsSelectionMode.AutoDetect,
+            DisplayLabel = "Needs manual selection",
+            FfmpegRateValue = "",
+            NominalConversionFps = null,
+            HasResolvedFps = false,
+            RequiresManualFpsSelection = true,
+            FpsValidationMessage = "Auto-detect could not determine the source FPS. Double-click this row and choose Source FPS.",
+            Confidence = "Unavailable",
+            Warning = "FPS auto-detection failed."
         };
     }
 

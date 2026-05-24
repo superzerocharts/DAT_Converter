@@ -8,6 +8,8 @@ public static class FfmpegCommandBuilder
         OutputFormat outputFormat,
         FpsOption fps)
     {
+        ValidateResolvedFps(fps);
+
         var arguments = new List<string>
         {
             "-n",
@@ -60,6 +62,8 @@ public static class FfmpegCommandBuilder
         OutputFormat outputFormat,
         FpsOption fps)
     {
+        ValidateResolvedFps(fps);
+
         var arguments = new List<string>
         {
             "-n",
@@ -102,5 +106,13 @@ public static class FfmpegCommandBuilder
         return string.Equals(fps.FfmpegValue, "30000/1001", StringComparison.Ordinal)
             ? $"({fps.FfmpegValue})"
             : fps.FfmpegValue;
+    }
+
+    private static void ValidateResolvedFps(FpsOption fps)
+    {
+        if (string.IsNullOrWhiteSpace(fps.FfmpegValue))
+        {
+            throw new InvalidOperationException("Source FPS is not set. Choose Source FPS before converting.");
+        }
     }
 }

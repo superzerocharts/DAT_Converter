@@ -6,10 +6,20 @@ public sealed class AppSettingsService
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
-    public string SettingsPath { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "DAT Converter",
-        "settings.json");
+    public AppSettingsService()
+        : this(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "DAT Converter",
+            "settings.json"))
+    {
+    }
+
+    public AppSettingsService(string settingsPath)
+    {
+        SettingsPath = settingsPath;
+    }
+
+    public string SettingsPath { get; }
 
     public AppSettings Load(out string logMessage)
     {
@@ -75,7 +85,7 @@ public sealed class AppSettingsService
             string.Equals(settings.ConversionMode, "Full", StringComparison.OrdinalIgnoreCase)
                 ? "Encode"
                 : "Remux";
-        settings.Fps = FpsOption.FromLabel(settings.Fps).Label;
+        settings.Fps = IsAutoDetectFps(settings.Fps) ? "Auto-detect" : FpsOption.FromLabel(settings.Fps).Label;
 
         if (settings.WindowWidth < 960)
         {
@@ -95,12 +105,18 @@ public sealed class AppSettingsService
         settings.OutputDestinationMode = OutputDestinationMode.SameFolderAsSource.ToString();
         settings.OutputFormat = "MP4";
         settings.ConversionMode = "Remux";
-        settings.Fps = "30";
+        settings.Fps = "Auto-detect";
     }
 
     private static void ApplyStartupWindowDefaults(AppSettings settings)
     {
         settings.WindowWidth = 960;
         settings.WindowHeight = 820;
+    }
+
+    private static bool IsAutoDetectFps(string? value)
+    {
+        return string.Equals(value, "Auto-detect", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(value, "Auto", StringComparison.OrdinalIgnoreCase);
     }
 }

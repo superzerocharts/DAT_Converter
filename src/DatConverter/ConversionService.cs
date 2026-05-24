@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace DatConverter;
 
 public sealed class ConversionService
@@ -20,6 +22,11 @@ public sealed class ConversionService
         IProgress<ConversionProgress>? progress,
         CancellationToken cancellationToken)
     {
+        if (!HasResolvedFps(fps))
+        {
+            return BuildUnresolvedFpsResult(inputPath, outputPath, outputFormat, fps, "Fast", duration);
+        }
+
         var arguments = FfmpegCommandBuilder.BuildRemuxArguments(inputPath, outputPath, outputFormat, fps);
         return await RunConversionAsync(
             inputPath,
@@ -44,6 +51,11 @@ public sealed class ConversionService
         IProgress<ConversionProgress>? progress,
         CancellationToken cancellationToken)
     {
+        if (!HasResolvedFps(fps))
+        {
+            return BuildUnresolvedFpsResult(inputPath, outputPath, outputFormat, fps, "Encode", duration);
+        }
+
         var arguments = FfmpegCommandBuilder.BuildEncodeArguments(inputPath, outputPath, outputFormat, fps);
         return await RunConversionAsync(
             inputPath,
@@ -51,7 +63,7 @@ public sealed class ConversionService
             outputFormat,
             fps,
             arguments,
-            "Full",
+            "Encode",
             "Full conversion completed.",
             ConversionResult.FullFailedMessage,
             duration,
@@ -110,7 +122,9 @@ public sealed class ConversionService
                 UsedDeterminateProgress: duration.HasValue);
         }
 
+        var hadSidecarPartialBeforeConversion = File.Exists(outputPath + ".partial");
         var progressParser = new ConversionProgressParser(duration);
+        var stopwatch = Stopwatch.StartNew();
         var processResult = await FfmpegProcessRunner.RunAsync(
             ffmpegTools.FfmpegPath,
             arguments,
@@ -124,6 +138,8 @@ public sealed class ConversionService
                     progress?.Report(progressUpdate);
                 }
             });
+        stopwatch.Stop();
+        var processingTime = stopwatch.Elapsed;
 
         if (processResult.ExitCode == 0 && TryGetFileLength(outputPath) > 0)
         {
@@ -142,10 +158,13 @@ public sealed class ConversionService
                 OutputFormat: outputFormat.DisplayName(),
                 TimedOut: processResult.TimedOut,
                 Duration: duration,
-                UsedDeterminateProgress: duration.HasValue);
+                UsedDeterminateProgress: duration.HasValue,
+                ProcessingTime: processingTime);
         }
 
-        var partialOutputMessage = PartialOutputService.TryMovePartialOutput(outputPath, inputPath);
+        var partialOutputMessage = processResult.WasCanceled
+            ? PartialOutputService.TryDeleteCanceledOutput(outputPath, inputPath, deleteSidecarPartial: !hadSidecarPartialBeforeConversion)
+            : PartialOutputService.TryMovePartialOutput(outputPath, inputPath);
         var userMessage = processResult.WasCanceled ? ConversionResult.CanceledMessage : failureMessage;
         return new ConversionResult(
             false,
@@ -164,7 +183,8 @@ public sealed class ConversionService
             processResult.WasCanceled,
             processResult.TimedOut,
             duration,
-            duration.HasValue);
+            duration.HasValue,
+            processingTime);
     }
 
     private static long TryGetFileLength(string path)
@@ -177,5 +197,35 @@ public sealed class ConversionService
         {
             return 0;
         }
+    }
+
+    private static bool HasResolvedFps(FpsOption fps)
+    {
+        return !string.IsNullOrWhiteSpace(fps.FfmpegValue);
+    }
+
+    private ConversionResult BuildUnresolvedFpsResult(
+        string inputPath,
+        string outputPath,
+        OutputFormat outputFormat,
+        FpsOption fps,
+        string conversionMode,
+        TimeSpan? duration)
+    {
+        return new ConversionResult(
+            false,
+            "Conversion blocked because Source FPS is not set.",
+            ffmpegTools.FfmpegPath,
+            Array.Empty<string>(),
+            inputPath,
+            outputPath,
+            fps,
+            null,
+            "",
+            "Source FPS is not set. Choose Source FPS before converting.",
+            ConversionMode: conversionMode,
+            OutputFormat: outputFormat.DisplayName(),
+            Duration: duration,
+            UsedDeterminateProgress: duration.HasValue);
     }
 }

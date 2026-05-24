@@ -8,7 +8,8 @@ public static class QueueSettingsLockService
         string outputFolderPath,
         string plannedOutputPath,
         bool hasExistingDirectOutput,
-        string readyProgressText)
+        string readyProgressText,
+        QueueItemFpsResolution? fpsResolution = null)
     {
         item.PlannedOutputPath = plannedOutputPath;
         item.OutputDestinationMode = settings.OutputDestinationMode;
@@ -17,7 +18,9 @@ public static class QueueSettingsLockService
             : null;
         item.OutputFormat = settings.OutputFormat;
         item.ConversionMode = settings.ConversionMode;
-        item.Fps = settings.Fps;
+        item.ApplyFpsResolution(
+            settings.FpsSettings,
+            fpsResolution ?? QueueItemFpsResolution.FromManual(settings.FpsSettings.ToManualFpsOption()));
         item.HasExistingDirectOutput = hasExistingDirectOutput;
 
         if (hasExistingDirectOutput)
@@ -25,6 +28,15 @@ public static class QueueSettingsLockService
             item.Status = QueueItemStatus.Skipped;
             item.StatusText = "Exists";
             item.ProgressText = "Selected output exists";
+            return;
+        }
+
+        if (!item.HasResolvedFps)
+        {
+            item.PreProbeResult = null;
+            item.Status = QueueItemStatus.Warning;
+            item.StatusText = "Needs FPS";
+            item.ProgressText = "Choose Source FPS";
             return;
         }
 
