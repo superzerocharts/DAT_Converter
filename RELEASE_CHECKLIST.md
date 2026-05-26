@@ -49,6 +49,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\publish-portable.p
 ```
 
 - Verify `publish\DAT_Converter_Portable\DatConverter.exe` exists.
+- Verify end-user `publish\DAT_Converter_Portable\README.txt` exists.
 - Verify bundled FFmpeg is present under `publish\DAT_Converter_Portable\tools\ffmpeg`.
 - Verify docs are present under `publish\DAT_Converter_Portable\docs`.
 - Launch the portable app and confirm bundled FFmpeg detection.
