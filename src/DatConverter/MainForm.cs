@@ -266,7 +266,10 @@ public sealed class MainForm : Form
         clearLogButton.Click += ClearLogButton_Click;
         ResizeEnd += MainForm_ResizeEnd;
 
-        Controls.Add(BuildLayout());
+        var layout = BuildLayout();
+        Controls.Add(layout);
+        ConfigureQueueDragDropTarget(this);
+        ConfigureQueueDragDropTargets(layout);
         InitializeTechnicalLog();
         technicalLog.Append(settingsLoadMessage);
         technicalLog.Append($"Output destination mode: {FormatOutputDestinationMode(selectionState.OutputDestinationMode)}.");
@@ -276,6 +279,29 @@ public sealed class MainForm : Form
     }
 
     public FfmpegTools FfmpegTools => ffmpegTools;
+
+    private void ConfigureQueueDragDropTargets(Control control)
+    {
+        ConfigureQueueDragDropTarget(control);
+
+        foreach (Control child in control.Controls)
+        {
+            if (child is TextBoxBase or ComboBox or Button or ProgressBar)
+            {
+                continue;
+            }
+
+            ConfigureQueueDragDropTargets(child);
+        }
+    }
+
+    private void ConfigureQueueDragDropTarget(Control control)
+    {
+        control.AllowDrop = true;
+        control.DragEnter += QueueDropTarget_DragEnter;
+        control.DragOver += QueueDropTarget_DragOver;
+        control.DragDrop += QueueDropTarget_DragDrop;
+    }
 
     private void InitializeTechnicalLog()
     {
@@ -404,6 +430,112 @@ public sealed class MainForm : Form
         }
 
         await ScanFolderAndPreviewQueueAddAsync(dialog.SelectedPath, includeSubfolders);
+    }
+
+    private void QueueDropTarget_DragEnter(object? sender, DragEventArgs e)
+    {
+        ApplyQueueDragEffect(e);
+    }
+
+    private void QueueDropTarget_DragOver(object? sender, DragEventArgs e)
+    {
+        ApplyQueueDragEffect(e);
+    }
+
+    private async void QueueDropTarget_DragDrop(object? sender, DragEventArgs e)
+    {
+        ApplyQueueDragEffect(e);
+        if (e.Effect != DragDropEffects.Copy)
+        {
+            return;
+        }
+
+        if (e.Data?.GetData(DataFormats.FileDrop) is not string[] droppedPaths)
+        {
+            return;
+        }
+
+        await AddDroppedPathsToQueueAsync(droppedPaths);
+    }
+
+    private void ApplyQueueDragEffect(DragEventArgs e)
+    {
+        e.Effect = ffmpegTools.AreAvailable && e.Data?.GetDataPresent(DataFormats.FileDrop) == true
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+    }
+
+    private async Task AddDroppedPathsToQueueAsync(IReadOnlyCollection<string> droppedPaths)
+    {
+        if (droppedPaths.Count == 0)
+        {
+            return;
+        }
+
+        var addingToRunningQueue = isQueueProcessing;
+        var plan = QueueDropRoutingService.CreatePlan(droppedPaths, addingToRunningQueue);
+        if (!plan.HasDroppedItems)
+        {
+            RefreshStatusLog("No files were added to the queue.");
+            technicalLog.Append($"Drag and drop skipped because no existing files or folders were found. Missing paths: {plan.MissingPaths.Count}.");
+            return;
+        }
+
+        if (!TryPrepareForQueueAdd())
+        {
+            return;
+        }
+
+        if (plan.MissingPaths.Count > 0)
+        {
+            technicalLog.Append($"Drag and drop ignored missing paths. Count: {plan.MissingPaths.Count}.");
+        }
+
+        var holdingRunningQueueOpen = addingToRunningQueue && plan.FilePathsToAdd.Count > 0;
+        if (holdingRunningQueueOpen)
+        {
+            pendingRunningQueueAddOperations++;
+        }
+
+        try
+        {
+            if (plan.RejectedFolderPaths.Count > 0)
+            {
+                const string message = "Folders cannot be dropped while the queue is running. Use Add Folder if needed.";
+                RefreshStatusLog(message);
+                technicalLog.Append($"Drag and drop rejected folder paths while queue was running. Folders: {plan.RejectedFolderPaths.Count}; Files still routed: {plan.FilePathsToAdd.Count}.");
+                MessageBox.Show(this, message, "Drag and Drop", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+
+            if (plan.FilePathsToAdd.Count > 0)
+            {
+                await AddFilesToQueueAsync(plan.FilePathsToAdd, addingToRunningQueue);
+            }
+        }
+        finally
+        {
+            if (holdingRunningQueueOpen)
+            {
+                pendingRunningQueueAddOperations--;
+            }
+        }
+
+        if (addingToRunningQueue)
+        {
+            return;
+        }
+
+        foreach (var folderPath in plan.FolderPathsToAdd)
+        {
+            if (!ShowAddFolderOptionsDialog(folderPath, out var includeSubfolders))
+            {
+                technicalLog.Append($"Drag and drop folder add canceled by user. Folder: {folderPath}");
+                RefreshStatusLog("Folder scan canceled.");
+                continue;
+            }
+
+            await ScanFolderAndPreviewQueueAddAsync(folderPath, includeSubfolders);
+        }
     }
 
     private bool ShowAddFolderOptionsDialog(string folderPath, out bool includeSubfolders)
