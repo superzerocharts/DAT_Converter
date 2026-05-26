@@ -23,8 +23,8 @@ Expected portable structure:
 ```text
 DAT_Converter_Portable\
   DatConverter.exe
-  README.txt
   docs\
+    README.txt
     THIRD_PARTY_NOTICES.md
   tools\
     ffmpeg\

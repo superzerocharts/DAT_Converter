@@ -130,7 +130,7 @@ $noticesPath = Join-Path $repoRoot "THIRD_PARTY_NOTICES.md"
 $docsPath = Join-Path $resolvedPortablePath "docs"
 New-Item -ItemType Directory -Path $docsPath -Force | Out-Null
 if (Test-Path -LiteralPath $endUserReadmePath) {
-    Copy-Item -LiteralPath $endUserReadmePath -Destination (Join-Path $resolvedPortablePath "README.txt") -Force
+    Copy-Item -LiteralPath $endUserReadmePath -Destination (Join-Path $docsPath "README.txt") -Force
 }
 if (Test-Path -LiteralPath $noticesPath) {
     Copy-Item -LiteralPath $noticesPath -Destination (Join-Path $docsPath "THIRD_PARTY_NOTICES.md") -Force
