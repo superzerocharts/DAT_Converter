@@ -39,6 +39,8 @@ public sealed class BurnTimestampMetadataBuilderTests
 
     [Theory]
     [InlineData("Encode", true)]
+    [InlineData("EncodeNvenc", true)]
+    [InlineData("Full NVENC", true)]
     [InlineData("Fast", false)]
     [InlineData("Remux", false)]
     public void IsSupportedMode_RequiresEncode(string mode, bool expected)

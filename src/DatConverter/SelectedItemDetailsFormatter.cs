@@ -127,9 +127,7 @@ public static class SelectedItemDetailsFormatter
 
     private static string FormatConversionModeForDisplay(string? conversionMode)
     {
-        return string.Equals(conversionMode, "Encode", StringComparison.OrdinalIgnoreCase)
-            ? "Full"
-            : "Fast";
+        return ConversionModes.FormatDisplay(conversionMode);
     }
 
     private static string FormatFpsNote(QueueItem item)

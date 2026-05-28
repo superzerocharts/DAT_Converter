@@ -24,7 +24,7 @@ public static class BurnTimestampMetadataBuilder
 
     public static bool IsSupportedMode(string? conversionMode)
     {
-        return string.Equals(conversionMode, "Encode", StringComparison.OrdinalIgnoreCase);
+        return ConversionModes.IsEncode(ConversionModes.ParseDisplay(conversionMode));
     }
 
     private static string ResolveCameraName(QueueItem item)

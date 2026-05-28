@@ -29,6 +29,16 @@ public sealed class BurnTimestampUiPolicyTests
     }
 
     [Fact]
+    public void Evaluate_EnablesBurnTimestampInFullNvencMode()
+    {
+        var state = BurnTimestampUiPolicy.Evaluate("Full NVENC", hasRecordingTime: true, requestedChecked: true);
+
+        Assert.True(state.Enabled);
+        Assert.True(state.Checked);
+        Assert.Equal(BurnTimestampMetadataBuilder.ReliabilityNote, state.Note);
+    }
+
+    [Fact]
     public void Evaluate_BlocksBurnTimestampWithoutRecordingTime()
     {
         var state = BurnTimestampUiPolicy.Evaluate("Encode", hasRecordingTime: false, requestedChecked: true);

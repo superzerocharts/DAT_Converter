@@ -6,4 +6,11 @@ public sealed record ConversionProgress(
     string? Frame,
     string? Speed,
     bool IsEnd,
-    string Summary);
+    string Summary,
+    string? Fps = null,
+    string? Bitrate = null,
+    string? TotalSize = null,
+    string? DupFrames = null,
+    string? DropFrames = null,
+    string? OutTimeUs = null,
+    string? OutTimeMs = null);

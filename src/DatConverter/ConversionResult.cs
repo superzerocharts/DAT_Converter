@@ -19,7 +19,8 @@ public sealed record ConversionResult(
     TimeSpan? Duration = null,
     bool UsedDeterminateProgress = false,
     TimeSpan? ProcessingTime = null,
-    ConversionInputPathMode InputPathMode = ConversionInputPathMode.StandardWholeDatRawH264)
+    ConversionInputPathMode InputPathMode = ConversionInputPathMode.StandardWholeDatRawH264,
+    ConversionTelemetry? Telemetry = null)
 {
     public const string FastFailedMessage = "Fast mode failed. Try Full mode.";
     public const string FullFailedMessage = "Full mode failed. This .dat file may be unsupported or corrupt.";

@@ -362,6 +362,42 @@ public sealed class TrimmedConversionTests
     }
 
     [Fact]
+    public async Task EncodeTrimmedNvencAsync_UsesNvencSettingsAndPtsStartPts()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = Path.Combine(temp.Path, "clip.dat");
+        var outputPath = Path.Combine(temp.Path, "clip.mp4");
+        File.WriteAllText(inputPath, "source");
+        var service = CreateService(
+            (_, _, _) => throw new InvalidOperationException("Full extractor should not run."),
+            (_, arguments, _, _, _, _) =>
+            {
+                Assert.Equal("1.5", GetOptionValue(arguments, "-ss"));
+                Assert.Equal("3", GetOptionValue(arguments, "-t"));
+                Assert.Equal("setpts=PTS-STARTPTS,fps=30,format=yuv420p", GetOptionValue(arguments, "-vf"));
+                Assert.Equal("h264_nvenc", GetOptionValue(arguments, "-c:v"));
+                Assert.Equal("p1", GetOptionValue(arguments, "-preset"));
+                Assert.Equal("23", GetOptionValue(arguments, "-cq"));
+                Assert.Equal("0", GetOptionValue(arguments, "-b:v"));
+                File.WriteAllText(outputPath, "encoded trim");
+                return Task.FromResult(new ProcessRunResult(0, false, false, "", ""));
+            },
+            (_, start, end, _, tempH264Path, _) =>
+            {
+                Assert.Equal(TimeSpan.FromSeconds(2), start);
+                Assert.Equal(TimeSpan.FromSeconds(5), end);
+                File.WriteAllText(tempH264Path, "trimmed h264");
+                return CreateWindowResult(tempH264Path, start, keyframe: TimeSpan.FromSeconds(0.5));
+            });
+
+        var result = await service.EncodeTrimmedNvencAsync(inputPath, outputPath, OutputFormat.Mp4, FpsOption.FromLabel("30"), TimeSpan.FromSeconds(10), new TrimRange(TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5)), null, CancellationToken.None);
+
+        Assert.True(result.IsSuccess, result.StandardError);
+        Assert.Equal(ConversionModes.EncodeNvenc, result.ConversionMode);
+        Assert.Equal(ConversionInputPathMode.TrimmedCleanH264, result.InputPathMode);
+    }
+
+    [Fact]
     public async Task EncodeTrimmedSplitAsync_CrossingBoundary_ExtractsRelevantSegmentsAndUsesFirstPreRoll()
     {
         using var temp = new TempDirectory();
@@ -512,6 +548,16 @@ public sealed class TrimmedConversionTests
 
         Assert.False(TrimConversionPolicy.ShouldBlockTrimmedConversion(trim, "Encode"));
         Assert.True(TrimConversionPolicy.IsTrimSupportedForConversionMode("Encode"));
+    }
+
+    [Fact]
+    public void TrimConversionPolicy_FullNvencWithTrim_IsSupported()
+    {
+        var trim = new TrimRange(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2));
+
+        Assert.False(TrimConversionPolicy.ShouldBlockTrimmedConversion(trim, ConversionModes.EncodeNvenc));
+        Assert.False(TrimConversionPolicy.ShouldBlockTrimmedConversion(trim, ConversionModes.FullNvencDisplayName));
+        Assert.True(TrimConversionPolicy.IsTrimSupportedForConversionMode(ConversionModes.EncodeNvenc));
     }
 
     [Fact]

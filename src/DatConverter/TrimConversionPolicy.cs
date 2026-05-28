@@ -8,9 +8,9 @@ public static class TrimConversionPolicy
 
     public static bool IsTrimSupportedForConversionMode(string conversionMode)
     {
-        return string.Equals(conversionMode, "Fast", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(conversionMode, "Remux", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(conversionMode, "Encode", StringComparison.OrdinalIgnoreCase);
+        var normalizedMode = ConversionModes.ParseDisplay(conversionMode);
+        return string.Equals(normalizedMode, ConversionModes.Remux, StringComparison.OrdinalIgnoreCase) ||
+               ConversionModes.IsEncode(normalizedMode);
     }
 
     public static string ResolveModeForTrim(TrimRange? trimRange, string requestedConversionMode)

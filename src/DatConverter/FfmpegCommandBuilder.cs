@@ -107,6 +107,32 @@ public static class FfmpegCommandBuilder
         return arguments;
     }
 
+    public static IReadOnlyList<string> BuildNvencEncodeArguments(
+        string inputPath,
+        string outputPath,
+        OutputFormat outputFormat,
+        FpsOption fps,
+        ContainerMetadata? metadata = null,
+        BurnTimestampOptions? burnTimestamp = null)
+    {
+        ValidateResolvedFps(fps);
+
+        var arguments = BuildEncodeBaseArguments(inputPath, fps);
+        arguments.Add("-vf");
+        arguments.Add(BuildEncodeVideoFilter(fps, burnTimestamp));
+        AddNvencEncodeOptions(arguments);
+
+        if (outputFormat.IsMp4())
+        {
+            arguments.Add("-movflags");
+            arguments.Add("+faststart");
+        }
+
+        arguments.AddRange(ContainerMetadataFormatter.BuildFfmpegArguments(metadata));
+        arguments.Add(outputPath);
+        return arguments;
+    }
+
     public static IReadOnlyList<string> BuildTrimEncodeArguments(
         string inputPath,
         string outputPath,
@@ -159,6 +185,72 @@ public static class FfmpegCommandBuilder
         arguments.AddRange(ContainerMetadataFormatter.BuildFfmpegArguments(metadata));
         arguments.Add(outputPath);
         return arguments;
+    }
+
+    public static IReadOnlyList<string> BuildTrimNvencEncodeArguments(
+        string inputPath,
+        string outputPath,
+        OutputFormat outputFormat,
+        FpsOption fps,
+        TimeSpan preRoll,
+        TimeSpan duration,
+        ContainerMetadata? metadata = null,
+        BurnTimestampOptions? burnTimestamp = null)
+    {
+        ValidateResolvedFps(fps);
+
+        var arguments = BuildEncodeBaseArguments(inputPath, fps);
+        arguments.Add("-ss");
+        arguments.Add(FormatSeconds(preRoll));
+        arguments.Add("-t");
+        arguments.Add(FormatSeconds(duration));
+        arguments.Add("-vf");
+        arguments.Add(BuildTrimEncodeVideoFilter(fps, burnTimestamp));
+        AddNvencEncodeOptions(arguments);
+
+        if (outputFormat.IsMp4())
+        {
+            arguments.Add("-movflags");
+            arguments.Add("+faststart");
+        }
+
+        arguments.AddRange(ContainerMetadataFormatter.BuildFfmpegArguments(metadata));
+        arguments.Add(outputPath);
+        return arguments;
+    }
+
+    private static List<string> BuildEncodeBaseArguments(string inputPath, FpsOption fps)
+    {
+        return new List<string>
+        {
+            "-n",
+            "-nostats",
+            "-progress",
+            "pipe:1",
+            "-fflags",
+            "+genpts+discardcorrupt",
+            "-err_detect",
+            "ignore_err",
+            "-f",
+            "h264",
+            "-r",
+            fps.FfmpegValue,
+            "-i",
+            inputPath
+        };
+    }
+
+    private static void AddNvencEncodeOptions(List<string> arguments)
+    {
+        arguments.Add("-an");
+        arguments.Add("-c:v");
+        arguments.Add("h264_nvenc");
+        arguments.Add("-preset");
+        arguments.Add("p1");
+        arguments.Add("-cq");
+        arguments.Add("23");
+        arguments.Add("-b:v");
+        arguments.Add("0");
     }
 
     private static string BuildSetPtsFpsExpression(FpsOption fps)

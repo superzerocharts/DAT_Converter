@@ -165,6 +165,51 @@ public sealed class CommandBuilderTests
     }
 
     [Fact]
+    public void NvencEncodeArguments_Mp4UseExpectedSettings()
+    {
+        var arguments = FfmpegCommandBuilder.BuildNvencEncodeArguments(
+            @"C:\in\clip.dat",
+            @"C:\out\clip.mp4",
+            OutputFormat.Mp4,
+            FpsOption.FromLabel("29.97"));
+
+        Assert.Equal("-n", arguments[0]);
+        AssertOptionValue(arguments, "-progress", "pipe:1");
+        AssertOptionValue(arguments, "-fflags", "+genpts+discardcorrupt");
+        AssertOptionValue(arguments, "-err_detect", "ignore_err");
+        AssertOptionValue(arguments, "-f", "h264");
+        AssertOptionValue(arguments, "-r", "30000/1001");
+        AssertOptionValue(arguments, "-i", @"C:\in\clip.dat");
+        AssertOptionValue(arguments, "-c:v", "h264_nvenc");
+        AssertOptionValue(arguments, "-preset", "p1");
+        AssertOptionValue(arguments, "-cq", "23");
+        AssertOptionValue(arguments, "-b:v", "0");
+        Assert.Contains("-an", arguments);
+        AssertOptionValue(arguments, "-movflags", "+faststart");
+        Assert.Equal(@"C:\out\clip.mp4", arguments[^1]);
+
+        var filter = GetOptionValue(arguments, "-vf");
+        Assert.Equal("setpts=N/((30000/1001)*TB),fps=30000/1001,format=yuv420p", filter);
+    }
+
+    [Fact]
+    public void NvencEncodeArguments_MkvDoesNotIncludeFaststart()
+    {
+        var arguments = FfmpegCommandBuilder.BuildNvencEncodeArguments(
+            @"C:\in\clip.dat",
+            @"C:\out\clip.mkv",
+            OutputFormat.Mkv,
+            FpsOption.FromLabel("30"));
+
+        AssertOptionValue(arguments, "-c:v", "h264_nvenc");
+        AssertOptionValue(arguments, "-preset", "p1");
+        AssertOptionValue(arguments, "-cq", "23");
+        AssertOptionValue(arguments, "-b:v", "0");
+        Assert.DoesNotContain("-movflags", arguments);
+        Assert.DoesNotContain("+faststart", arguments);
+    }
+
+    [Fact]
     public void RemuxArguments_Mp4IncludeContainerMetadata()
     {
         var metadata = new ContainerMetadata(
@@ -317,6 +362,46 @@ public sealed class CommandBuilderTests
 
         Assert.DoesNotContain("-movflags", arguments);
         Assert.Contains("drawtext", GetOptionValue(arguments, "-vf"));
+    }
+
+    [Fact]
+    public void NvencEncodeArguments_WithBurnTimestamp_AddsDrawtextFilters()
+    {
+        var arguments = FfmpegCommandBuilder.BuildNvencEncodeArguments(
+            @"C:\in\clip.h264",
+            @"C:\out\clip.mp4",
+            OutputFormat.Mp4,
+            FpsOption.FromLabel("30"),
+            metadata: null,
+            burnTimestamp: new BurnTimestampOptions("Camera", new DateTime(2026, 5, 22, 4, 40, 12), @"C:\Windows\Fonts\consolab.ttf"));
+
+        var filter = GetOptionValue(arguments, "-vf");
+        Assert.StartsWith("setpts=N/(30*TB),fps=30,format=yuv420p", filter, StringComparison.Ordinal);
+        Assert.Contains("drawtext", filter);
+        Assert.Contains("fontfile='C\\:/Windows/Fonts/consolab.ttf'", filter);
+        AssertOptionValue(arguments, "-c:v", "h264_nvenc");
+    }
+
+    [Fact]
+    public void TrimNvencEncodeArguments_UsePtsStartPtsAndTrimArguments()
+    {
+        var arguments = FfmpegCommandBuilder.BuildTrimNvencEncodeArguments(
+            @"C:\in\trim.h264",
+            @"C:\out\trim.mp4",
+            OutputFormat.Mp4,
+            FpsOption.FromLabel("30"),
+            TimeSpan.FromSeconds(1.5),
+            TimeSpan.FromSeconds(3));
+
+        AssertOptionValue(arguments, "-i", @"C:\in\trim.h264");
+        AssertOptionValue(arguments, "-ss", "1.5");
+        AssertOptionValue(arguments, "-t", "3");
+        Assert.Equal("setpts=PTS-STARTPTS,fps=30,format=yuv420p", GetOptionValue(arguments, "-vf"));
+        AssertOptionValue(arguments, "-c:v", "h264_nvenc");
+        AssertOptionValue(arguments, "-preset", "p1");
+        AssertOptionValue(arguments, "-cq", "23");
+        AssertOptionValue(arguments, "-b:v", "0");
+        AssertOptionValue(arguments, "-movflags", "+faststart");
     }
 
     private static void AssertOptionValue(IReadOnlyList<string> arguments, string option, string expectedValue)

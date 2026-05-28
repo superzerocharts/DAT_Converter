@@ -4,8 +4,7 @@ public static class BurnTimestampUiPolicy
 {
     public static BurnTimestampUiState Evaluate(string? conversionMode, bool hasRecordingTime, bool requestedChecked)
     {
-        var isFullMode = string.Equals(conversionMode, "Encode", StringComparison.OrdinalIgnoreCase) ||
-                         string.Equals(conversionMode, "Full", StringComparison.OrdinalIgnoreCase);
+        var isFullMode = ConversionModes.IsEncode(ConversionModes.ParseDisplay(conversionMode));
         var enabled = isFullMode && hasRecordingTime;
         return new BurnTimestampUiState(
             enabled,

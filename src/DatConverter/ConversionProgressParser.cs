@@ -12,6 +12,8 @@ public sealed class ConversionProgressParser
         this.duration = duration;
     }
 
+    public ConversionProgress? LastProgress { get; private set; }
+
     public ConversionProgress? ParseLine(string line)
     {
         var separatorIndex = line.IndexOf('=');
@@ -32,13 +34,21 @@ public sealed class ConversionProgressParser
         var outputTime = GetOutputTime();
         var percent = GetPercent(outputTime);
         var isEnd = string.Equals(value, "end", StringComparison.OrdinalIgnoreCase);
-        return new ConversionProgress(
+        LastProgress = new ConversionProgress(
             percent,
             outputTime,
             GetValue("frame"),
             GetValue("speed"),
             isEnd,
-            BuildSummary(percent, outputTime, GetValue("frame"), GetValue("speed")));
+            BuildSummary(percent, outputTime, GetValue("frame"), GetValue("fps"), GetValue("speed")),
+            GetValue("fps"),
+            GetValue("bitrate"),
+            GetValue("total_size"),
+            GetValue("dup_frames"),
+            GetValue("drop_frames"),
+            GetValue("out_time_us"),
+            GetValue("out_time_ms"));
+        return LastProgress;
     }
 
     private TimeSpan? GetOutputTime()
@@ -85,7 +95,7 @@ public sealed class ConversionProgressParser
         return long.TryParse(GetValue(key), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : null;
     }
 
-    private static string BuildSummary(int? percent, TimeSpan? outputTime, string? frame, string? speed)
+    private static string BuildSummary(int? percent, TimeSpan? outputTime, string? frame, string? fps, string? speed)
     {
         var parts = new List<string>();
 
@@ -102,6 +112,11 @@ public sealed class ConversionProgressParser
         if (!string.IsNullOrWhiteSpace(frame))
         {
             parts.Add($"frame {frame}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(fps))
+        {
+            parts.Add($"fps {fps}");
         }
 
         if (!string.IsNullOrWhiteSpace(speed))

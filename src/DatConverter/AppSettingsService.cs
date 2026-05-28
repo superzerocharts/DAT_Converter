@@ -5,6 +5,7 @@ namespace DatConverter;
 public sealed class AppSettingsService
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private readonly bool nvencAvailable;
 
     public AppSettingsService()
         : this(Path.Combine(
@@ -14,9 +15,19 @@ public sealed class AppSettingsService
     {
     }
 
-    public AppSettingsService(string settingsPath)
+    public AppSettingsService(bool nvencAvailable)
+        : this(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "DAT Converter",
+            "settings.json"),
+            nvencAvailable)
+    {
+    }
+
+    public AppSettingsService(string settingsPath, bool nvencAvailable = false)
     {
         SettingsPath = settingsPath;
+        this.nvencAvailable = nvencAvailable;
     }
 
     public string SettingsPath { get; }
@@ -33,7 +44,7 @@ public sealed class AppSettingsService
 
             var json = File.ReadAllText(SettingsPath);
             var settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? CreateDefault();
-            settings = Normalize(settings);
+            settings = Normalize(settings, nvencAvailable);
             ApplyStartupControlDefaults(settings);
             logMessage = $"Settings loaded. Path: {SettingsPath}";
             return settings;
@@ -49,7 +60,7 @@ public sealed class AppSettingsService
     {
         try
         {
-            var normalized = Normalize(settings);
+            var normalized = Normalize(settings, nvencAvailable);
             var directory = Path.GetDirectoryName(SettingsPath);
             if (!string.IsNullOrWhiteSpace(directory))
             {
@@ -74,16 +85,21 @@ public sealed class AppSettingsService
 
     public static AppSettings Normalize(AppSettings settings)
     {
+        return Normalize(settings, nvencAvailable: false);
+    }
+
+    public static AppSettings Normalize(AppSettings settings, bool nvencAvailable)
+    {
         settings.OutputDestinationMode = Enum.TryParse<OutputDestinationMode>(settings.OutputDestinationMode, out var mode)
             ? mode.ToString()
             : OutputDestinationMode.SameFolderAsSource.ToString();
 
         settings.OutputFormat = string.Equals(settings.OutputFormat, "MKV", StringComparison.OrdinalIgnoreCase) ? "MKV" : "MP4";
-        settings.ConversionMode =
-            string.Equals(settings.ConversionMode, "Encode", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(settings.ConversionMode, "Full", StringComparison.OrdinalIgnoreCase)
-                ? "Encode"
-                : "Remux";
+        settings.ConversionMode = ConversionModes.ParseDisplay(settings.ConversionMode);
+        if (string.Equals(settings.ConversionMode, ConversionModes.EncodeNvenc, StringComparison.OrdinalIgnoreCase) && !nvencAvailable)
+        {
+            settings.ConversionMode = ConversionModes.Encode;
+        }
         settings.Fps = IsAutoDetectFps(settings.Fps) ? "Auto-detect" : FpsOption.FromLabel(settings.Fps).Label;
 
         if (settings.WindowWidth < 960)
@@ -103,7 +119,7 @@ public sealed class AppSettingsService
     {
         settings.OutputDestinationMode = OutputDestinationMode.SameFolderAsSource.ToString();
         settings.OutputFormat = "MP4";
-        settings.ConversionMode = "Remux";
+        settings.ConversionMode = ConversionModes.Remux;
         settings.Fps = "Auto-detect";
     }
 

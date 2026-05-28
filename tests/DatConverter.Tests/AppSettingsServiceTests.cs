@@ -42,6 +42,35 @@ public sealed class AppSettingsServiceTests
     }
 
     [Theory]
+    [InlineData("Fast", "Remux", "Fast")]
+    [InlineData("Full", "Encode", "Full")]
+    [InlineData("Full NVENC", "EncodeNvenc", "Full NVENC")]
+    [InlineData("EncodeNvenc", "EncodeNvenc", "Full NVENC")]
+    public void ConversionModes_ParseAndFormatDisplayNames(string display, string expectedInternalMode, string expectedDisplay)
+    {
+        var parsed = ConversionModes.ParseDisplay(display);
+
+        Assert.Equal(expectedInternalMode, parsed);
+        Assert.Equal(expectedDisplay, ConversionModes.FormatDisplay(parsed));
+    }
+
+    [Fact]
+    public void Normalize_FullNvencUnavailableFallsBackToFull()
+    {
+        var settings = AppSettingsService.Normalize(new AppSettings { ConversionMode = "Full NVENC" }, nvencAvailable: false);
+
+        Assert.Equal(ConversionModes.Encode, settings.ConversionMode);
+    }
+
+    [Fact]
+    public void Normalize_FullNvencAvailablePreservesNvenc()
+    {
+        var settings = AppSettingsService.Normalize(new AppSettings { ConversionMode = "Full NVENC" }, nvencAvailable: true);
+
+        Assert.Equal(ConversionModes.EncodeNvenc, settings.ConversionMode);
+    }
+
+    [Theory]
     [InlineData("Auto-detect")]
     [InlineData("25")]
     [InlineData("29.97")]

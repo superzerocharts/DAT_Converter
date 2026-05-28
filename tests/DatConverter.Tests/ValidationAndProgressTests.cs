@@ -59,6 +59,38 @@ public sealed class ValidationAndProgressTests
     }
 
     [Fact]
+    public void ProgressParser_ExposesFinalFfmpegProgressFields()
+    {
+        var parser = new ConversionProgressParser(TimeSpan.FromSeconds(10));
+
+        Assert.Null(parser.ParseLine("frame=240"));
+        Assert.Null(parser.ParseLine("fps=119.8"));
+        Assert.Null(parser.ParseLine("bitrate=1234.5kbits/s"));
+        Assert.Null(parser.ParseLine("total_size=1543210"));
+        Assert.Null(parser.ParseLine("out_time_ms=5000000"));
+        Assert.Null(parser.ParseLine("out_time_us=6000000"));
+        Assert.Null(parser.ParseLine("dup_frames=2"));
+        Assert.Null(parser.ParseLine("drop_frames=1"));
+        Assert.Null(parser.ParseLine("speed=3.2x"));
+        var progress = parser.ParseLine("progress=end");
+
+        Assert.NotNull(progress);
+        Assert.Same(progress, parser.LastProgress);
+        Assert.Equal(60, progress.Percent);
+        Assert.Equal(TimeSpan.FromSeconds(6), progress.OutputTime);
+        Assert.Equal("240", progress.Frame);
+        Assert.Equal("119.8", progress.Fps);
+        Assert.Equal("1234.5kbits/s", progress.Bitrate);
+        Assert.Equal("1543210", progress.TotalSize);
+        Assert.Equal("5000000", progress.OutTimeMs);
+        Assert.Equal("6000000", progress.OutTimeUs);
+        Assert.Equal("2", progress.DupFrames);
+        Assert.Equal("1", progress.DropFrames);
+        Assert.Equal("3.2x", progress.Speed);
+        Assert.Contains("fps 119.8", progress.Summary);
+    }
+
+    [Fact]
     public void ToolPathResolution_UsesBundledRelativeToolLocationsOnly()
     {
         var tools = ToolPathService.ResolveBundledTools();

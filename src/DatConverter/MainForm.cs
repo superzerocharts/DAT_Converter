@@ -55,6 +55,7 @@ public sealed class MainForm : Form
     private readonly Button copyLogButton;
     private readonly Button clearLogButton;
     private readonly FfmpegTools ffmpegTools;
+    private readonly NvencCapabilityResult nvencCapability;
     private readonly ProbeService probeService;
     private readonly ConversionService conversionService;
     private readonly QueueItemFpsResolver queueItemFpsResolver = new();
@@ -217,9 +218,10 @@ public sealed class MainForm : Form
     public MainForm()
     {
         ffmpegTools = ToolPathService.ResolveBundledTools();
+        nvencCapability = new NvencCapabilityService().Detect(ffmpegTools);
         probeService = new ProbeService(ffmpegTools);
         conversionService = new ConversionService(ffmpegTools);
-        appSettingsService = new AppSettingsService();
+        appSettingsService = new AppSettingsService(nvencCapability.IsAvailable);
         appSettings = appSettingsService.Load(out var settingsLoadMessage);
         selectionState.OutputDestinationMode = ParseOutputDestinationMode(appSettings.OutputDestinationMode);
         selectionState.ChosenOutputFolderPath = appSettings.LastChosenOutputFolder;
@@ -278,7 +280,8 @@ public sealed class MainForm : Form
         outputFolderTextBox = CreateReadOnlyTextBox(string.IsNullOrWhiteSpace(selectionState.ChosenOutputFolderPath) ? "No output folder selected" : selectionState.ChosenOutputFolderPath);
         browseOutputFolderButton = CreateButton("Browse...");
         outputFormatComboBox = CreateComboBox(new[] { "MP4", "MKV" }, appSettings.OutputFormat);
-        conversionModeComboBox = CreateComboBox(new[] { "Fast", "Full" }, FormatConversionModeForDisplay(appSettings.ConversionMode));
+        conversionModeComboBox = CreateComboBox(ConversionModes.DisplayOrder, FormatConversionModeForDisplay(appSettings.ConversionMode));
+        ConfigureConversionModeComboBox(conversionModeComboBox);
         frameRateComboBox = CreateComboBox(SourceFpsOptions.DisplayOrder, appSettings.Fps);
         convertButton = CreateButton("Convert");
         cancelButton = CreateButton("Cancel Current");
@@ -408,6 +411,7 @@ public sealed class MainForm : Form
         technicalLog.Append($"Application base directory: {ffmpegTools.ApplicationBaseDirectory}");
         technicalLog.Append($"Checked ffmpeg path: {ffmpegTools.FfmpegPath} ({FormatFoundStatus(ffmpegTools.FfmpegExists)})");
         technicalLog.Append($"Checked ffprobe path: {ffmpegTools.FfprobePath} ({FormatFoundStatus(ffmpegTools.FfprobeExists)})");
+        technicalLog.Append($"NVENC capability: {(nvencCapability.IsAvailable ? "available" : "unavailable")}. {nvencCapability.DiagnosticSummary}");
     }
 
     private void ApplyStartupToolValidation()
@@ -1081,7 +1085,8 @@ public sealed class MainForm : Form
         var browseButton = CreateButton("Browse...");
         browseButton.Margin = new Padding(0, 6, 0, 6);
         var formatComboBox = CreateComboBox(new[] { "MP4", "MKV" }, item.OutputFormat.DisplayName());
-        var modeComboBox = CreateComboBox(new[] { "Fast", "Full" }, FormatConversionModeForDisplay(item.ConversionMode));
+        var modeComboBox = CreateComboBox(ConversionModes.DisplayOrder, FormatConversionModeForDisplay(item.ConversionMode));
+        ConfigureConversionModeComboBox(modeComboBox);
         var fpsComboBox = CreateComboBox(SourceFpsOptions.DisplayOrder, FormatFpsSettingForEditor(item.FpsSettings));
         var originalEditorState = QueueItemEditorSnapshot.Capture(item);
         var trimStateLabel = new Label
@@ -1358,6 +1363,11 @@ public sealed class MainForm : Form
 
         modeComboBox.SelectedIndexChanged += (_, _) =>
         {
+            if (GuardUnavailableNvencSelection(modeComboBox))
+            {
+                return;
+            }
+
             ApplyBurnTimestampModeUi();
         };
 
@@ -1924,6 +1934,11 @@ public sealed class MainForm : Form
     private async void ConversionModeComboBox_SelectedIndexChanged(object? sender, EventArgs e)
     {
         if (isInitializing)
+        {
+            return;
+        }
+
+        if (GuardUnavailableNvencSelection(conversionModeComboBox))
         {
             return;
         }
@@ -3525,16 +3540,21 @@ public sealed class MainForm : Form
             conversionResult = item.IsSplitRecording
                 ? await ConvertSplitRecordingQueueItemAsync(item, duration, cancellationToken, metadata, burnTimestamp, progress)
                 : item.TrimRange is not null
-                    ? string.Equals(item.ConversionMode, "Encode", StringComparison.OrdinalIgnoreCase)
-                        ? await conversionService.EncodeTrimmedAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, item.TrimRange, progress, cancellationToken, metadata, burnTimestamp)
+                    ? ConversionModes.IsNvenc(item.ConversionMode)
+                        ? await conversionService.EncodeTrimmedNvencAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, item.TrimRange, progress, cancellationToken, metadata, burnTimestamp)
+                        : string.Equals(item.ConversionMode, ConversionModes.Encode, StringComparison.OrdinalIgnoreCase)
+                            ? await conversionService.EncodeTrimmedAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, item.TrimRange, progress, cancellationToken, metadata, burnTimestamp)
                         : TrimConversionPolicy.ShouldBlockTrimmedConversion(item.TrimRange, item.ConversionMode)
                             ? BuildTrimModeUnsupportedResult(item, duration)
                             : await conversionService.RemuxTrimmedAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, item.TrimRange, progress, cancellationToken, metadata)
-                    : string.Equals(item.ConversionMode, "Encode", StringComparison.OrdinalIgnoreCase)
-                        ? await conversionService.EncodeAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, progress, cancellationToken, metadata, burnTimestamp)
+                    : ConversionModes.IsNvenc(item.ConversionMode)
+                        ? await conversionService.EncodeNvencAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, progress, cancellationToken, metadata, burnTimestamp)
+                        : string.Equals(item.ConversionMode, ConversionModes.Encode, StringComparison.OrdinalIgnoreCase)
+                            ? await conversionService.EncodeAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, progress, cancellationToken, metadata, burnTimestamp)
                         : await conversionService.RemuxAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, progress, cancellationToken, metadata);
         }
 
+        conversionResult = EnrichConversionTelemetry(conversionResult, probeResult, item);
         item.ConversionResult = conversionResult;
         AppendConversionResultToLog(conversionResult, includeStatusSummary: false);
 
@@ -3653,8 +3673,8 @@ public sealed class MainForm : Form
         if (item.TrimRange is not null)
         {
             var timeline = RecordingTimelineBuilder.Build(item);
-            var trimmedResult = string.Equals(item.ConversionMode, "Encode", StringComparison.OrdinalIgnoreCase)
-                ? await conversionService.EncodeTrimmedSplitAsync(
+            var trimmedResult = ConversionModes.IsNvenc(item.ConversionMode)
+                ? await conversionService.EncodeTrimmedSplitNvencAsync(
                     item.InputPath,
                     item.PlannedOutputPath,
                     item.OutputFormat,
@@ -3666,7 +3686,8 @@ public sealed class MainForm : Form
                     metadata,
                     burnTimestamp,
                     progress)
-                : await conversionService.RemuxTrimmedSplitAsync(
+                : string.Equals(item.ConversionMode, ConversionModes.Encode, StringComparison.OrdinalIgnoreCase)
+                    ? await conversionService.EncodeTrimmedSplitAsync(
                     item.InputPath,
                     item.PlannedOutputPath,
                     item.OutputFormat,
@@ -3675,12 +3696,30 @@ public sealed class MainForm : Form
                     timeline,
                     item.TrimRange,
                     cancellationToken,
-                    metadata);
+                    metadata,
+                    burnTimestamp,
+                    progress)
+                    : await conversionService.RemuxTrimmedSplitAsync(
+                        item.InputPath,
+                        item.PlannedOutputPath,
+                        item.OutputFormat,
+                        item.Fps,
+                        item.SplitExportPlan,
+                        timeline,
+                        item.TrimRange,
+                        cancellationToken,
+                        metadata);
             stopwatch.Stop();
-            return trimmedResult with { ProcessingTime = stopwatch.Elapsed };
+            return trimmedResult with
+            {
+                ProcessingTime = stopwatch.Elapsed,
+                Telemetry = trimmedResult.Telemetry is null
+                    ? null
+                    : trimmedResult.Telemetry with { ElapsedConversionTime = stopwatch.Elapsed }
+            };
         }
 
-        if (item.BurnTimestamp && string.Equals(item.ConversionMode, "Encode", StringComparison.OrdinalIgnoreCase))
+        if (item.BurnTimestamp && ConversionModes.IsEncode(item.ConversionMode))
         {
             var timeline = RecordingTimelineBuilder.Build(item);
             if (!timeline.TotalDuration.HasValue || timeline.TotalDuration.Value <= TimeSpan.Zero)
@@ -3690,20 +3729,39 @@ public sealed class MainForm : Form
             }
 
             var fullRange = new TrimRange(TimeSpan.Zero, timeline.TotalDuration.Value);
-            var encodedResult = await conversionService.EncodeTrimmedSplitAsync(
-                item.InputPath,
-                item.PlannedOutputPath,
-                item.OutputFormat,
-                item.Fps,
-                item.SplitExportPlan,
-                timeline,
-                fullRange,
-                cancellationToken,
-                metadata,
-                burnTimestamp,
-                progress);
+            var encodedResult = ConversionModes.IsNvenc(item.ConversionMode)
+                ? await conversionService.EncodeTrimmedSplitNvencAsync(
+                    item.InputPath,
+                    item.PlannedOutputPath,
+                    item.OutputFormat,
+                    item.Fps,
+                    item.SplitExportPlan,
+                    timeline,
+                    fullRange,
+                    cancellationToken,
+                    metadata,
+                    burnTimestamp,
+                    progress)
+                : await conversionService.EncodeTrimmedSplitAsync(
+                    item.InputPath,
+                    item.PlannedOutputPath,
+                    item.OutputFormat,
+                    item.Fps,
+                    item.SplitExportPlan,
+                    timeline,
+                    fullRange,
+                    cancellationToken,
+                    metadata,
+                    burnTimestamp,
+                    progress);
             stopwatch.Stop();
-            return encodedResult with { ProcessingTime = stopwatch.Elapsed };
+            return encodedResult with
+            {
+                ProcessingTime = stopwatch.Elapsed,
+                Telemetry = encodedResult.Telemetry is null
+                    ? null
+                    : encodedResult.Telemetry with { ElapsedConversionTime = stopwatch.Elapsed }
+            };
         }
 
         var result = await new SpotterCombinedSplitExportPrototype(_ => item.SplitExportPlan, (inputPath, outputPath, token) => new SpotterDatPayloadExtractor().Extract(inputPath, outputPath, token), (executablePath, arguments, timeout, token) => FfmpegProcessRunner.RunAsync(executablePath, arguments, timeout, token))
@@ -3769,6 +3827,25 @@ public sealed class MainForm : Form
             OutputFormat: item.OutputFormat.DisplayName(),
             Duration: duration,
             UsedDeterminateProgress: duration.HasValue);
+    }
+
+    private ConversionResult EnrichConversionTelemetry(ConversionResult result, ProbeResult? probeResult, QueueItem? item)
+    {
+        if (result.Telemetry is null)
+        {
+            return result;
+        }
+
+        var telemetry = result.Telemetry.WithProbe(probeResult).WithNvencAvailability(nvencCapability.IsAvailable);
+        if (item is not null)
+        {
+            telemetry = telemetry.WithPathFlags(
+                trimUsed: item.TrimRange is not null || telemetry.TrimUsed == true,
+                burnTimestampUsed: item.BurnTimestamp || telemetry.BurnTimestampUsed == true,
+                splitExportUsed: item.IsSplitRecording);
+        }
+
+        return result with { Telemetry = telemetry };
     }
 
     private bool IsProcessableQueueItem(QueueItem item)
@@ -4117,8 +4194,10 @@ public sealed class MainForm : Form
                 CreationTime: null,
                 Title: Path.GetFileNameWithoutExtension(inputPath),
                 Comment: "Source type: Single DAT");
-            result = string.Equals(conversionMode, "Encode", StringComparison.OrdinalIgnoreCase)
-                ? await conversionService.EncodeAsync(inputPath, outputPath, outputFormat, fps, duration, progress, conversionCancellationTokenSource.Token, metadata)
+            result = ConversionModes.IsNvenc(conversionMode)
+                ? await conversionService.EncodeNvencAsync(inputPath, outputPath, outputFormat, fps, duration, progress, conversionCancellationTokenSource.Token, metadata)
+                : string.Equals(conversionMode, ConversionModes.Encode, StringComparison.OrdinalIgnoreCase)
+                    ? await conversionService.EncodeAsync(inputPath, outputPath, outputFormat, fps, duration, progress, conversionCancellationTokenSource.Token, metadata)
                 : await conversionService.RemuxAsync(inputPath, outputPath, outputFormat, fps, duration, progress, conversionCancellationTokenSource.Token, metadata);
         }
         finally
@@ -4132,6 +4211,7 @@ public sealed class MainForm : Form
             conversionCancellationTokenSource = null;
         }
 
+        result = EnrichConversionTelemetry(result, selectionState.LastProbeResult, null);
         lastConversionResult = result;
         AppendConversionResultToLog(result);
 
@@ -4680,17 +4760,12 @@ public sealed class MainForm : Form
 
     private static string ParseConversionModeDisplay(string? value)
     {
-        return string.Equals(value, "Full", StringComparison.OrdinalIgnoreCase) ||
-               string.Equals(value, "Encode", StringComparison.OrdinalIgnoreCase)
-            ? "Encode"
-            : "Remux";
+        return ConversionModes.ParseDisplay(value);
     }
 
     private static string FormatConversionModeForDisplay(string? conversionMode)
     {
-        return string.Equals(conversionMode, "Encode", StringComparison.OrdinalIgnoreCase)
-            ? "Full"
-            : "Fast";
+        return ConversionModes.FormatDisplay(conversionMode);
     }
 
     private string GetSelectedFrameRate()
@@ -4931,6 +5006,7 @@ public sealed class MainForm : Form
             lines.Add(result.PartialOutputMessage);
         }
 
+        AddTelemetryLines(lines, result.Telemetry);
         lines.Add("FFmpeg stdout/stderr are available in the log below.");
     }
 
@@ -4940,7 +5016,12 @@ public sealed class MainForm : Form
         lines.Add($"Progress summary: {progress.Summary}");
         lines.Add($"Output time: {FormatDuration(progress.OutputTime)}");
         lines.Add($"Frame: {FormatOptionalValue(progress.Frame, "Unknown")}");
+        lines.Add($"FPS: {FormatOptionalValue(progress.Fps, "Unknown")}");
         lines.Add($"Speed: {FormatOptionalValue(progress.Speed, "Unknown")}");
+        lines.Add($"Bitrate: {FormatOptionalValue(progress.Bitrate, "Unknown")}");
+        lines.Add($"Total size: {FormatOptionalValue(progress.TotalSize, "Unknown")}");
+        lines.Add($"Duplicated frames: {FormatOptionalValue(progress.DupFrames, "Unknown")}");
+        lines.Add($"Dropped frames: {FormatOptionalValue(progress.DropFrames, "Unknown")}");
     }
 
     private void AddDurationLines(List<string> lines)
@@ -4982,6 +5063,12 @@ public sealed class MainForm : Form
         var statusPrefix = includeStatusSummary ? $"{result.StatusSummary}. " : "Conversion details. ";
         technicalLog.Append($"{statusPrefix}Mode: {FormatConversionModeForDisplay(result.ConversionMode)}; Format: {result.OutputFormat}; Output: {result.OutputPath}; Exit code: {FormatExitCode(result.ExitCode)}; Canceled: {FormatYesNo(result.WasCanceled)}; Timed out: {FormatYesNo(result.TimedOut)}; Duration available: {FormatYesNo(result.Duration.HasValue)}; Progress mode: {(result.UsedDeterminateProgress ? "Determinate" : "Indeterminate")}.");
         technicalLog.Append($"FFmpeg command: {result.CommandLine}");
+        var telemetrySummary = BuildTelemetrySummary(result.Telemetry);
+        if (!string.IsNullOrWhiteSpace(telemetrySummary))
+        {
+            technicalLog.AppendBlock("Conversion Telemetry", telemetrySummary);
+        }
+
         if (IsMp4RemuxResult(result))
         {
             technicalLog.Append("Fast MP4 compatibility options: video-only stream mapping, avc1 tag, zero-based timestamps, 90k timescale, faststart.");
@@ -5004,6 +5091,62 @@ public sealed class MainForm : Form
         return (string.Equals(result.ConversionMode, "Remux", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(result.ConversionMode, "Fast", StringComparison.OrdinalIgnoreCase)) &&
             string.Equals(result.OutputFormat, OutputFormat.Mp4.DisplayName(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void AddTelemetryLines(List<string> lines, ConversionTelemetry? telemetry)
+    {
+        if (telemetry is null)
+        {
+            return;
+        }
+
+        lines.Add("Conversion telemetry:");
+        lines.AddRange(BuildTelemetrySummaryLines(telemetry));
+    }
+
+    private static string BuildTelemetrySummary(ConversionTelemetry? telemetry)
+    {
+        return telemetry is null
+            ? ""
+            : string.Join(Environment.NewLine, BuildTelemetrySummaryLines(telemetry));
+    }
+
+    private static IReadOnlyList<string> BuildTelemetrySummaryLines(ConversionTelemetry telemetry)
+    {
+        var lines = new List<string>
+        {
+            $"Mode/container: {FormatConversionModeForDisplay(telemetry.ConversionMode)} / {FormatOptionalValue(telemetry.OutputContainer, "Unknown")}",
+            $"Encoder: {FormatOptionalValue(telemetry.EncoderFamily, "Unknown")}; preset={FormatOptionalValue(telemetry.EncoderPreset, "Unknown")}; {FormatOptionalValue(telemetry.QualityMode, "quality")}={FormatOptionalValue(telemetry.QualityValue, "Unknown")}; NVENC available={FormatNullableYesNo(telemetry.NvencAvailable)}",
+            $"Input size: {FormatFileSize(telemetry.InputFileSizeBytes)}; Output size: {FormatFileSize(telemetry.OutputFileSizeBytes)}; Compression ratio: {FormatDouble(telemetry.CompressionRatio, "0.###")}",
+            $"Duration: {(telemetry.DurationAvailable == true ? ConversionTelemetry.FormatSeconds(telemetry.DurationSeconds) + " s" : "Unknown")}; Elapsed: {FormatDuration(telemetry.ElapsedConversionTime)}; Average encode speed: {FormatSpeedX(telemetry.AverageEncodeSpeed)}",
+            $"Final FFmpeg progress: frame={FormatOptionalValue(telemetry.FinalReportedFrame, "Unknown")}; fps={FormatOptionalValue(telemetry.FinalReportedFps, "Unknown")}; speed={FormatOptionalValue(telemetry.FinalReportedSpeed, "Unknown")}; bitrate={FormatOptionalValue(telemetry.ReportedBitrate, "Unknown")}; total_size={FormatOptionalValue(telemetry.FinalReportedTotalSize, "Unknown")}; dup={FormatOptionalValue(telemetry.FinalReportedDupFrames, "Unknown")}; drop={FormatOptionalValue(telemetry.FinalReportedDropFrames, "Unknown")}; output time={FormatDuration(telemetry.FinalOutputTime)}",
+            $"Computed output bitrate: {FormatBitrate(telemetry.ComputedOutputBitrateKbps)}; Selected FPS: {FormatOptionalValue(telemetry.SelectedFpsLabel, "Unknown")} ({FormatOptionalValue(telemetry.SelectedFfmpegFpsValue, "Unknown")})",
+            $"Source: codec={FormatOptionalValue(telemetry.Codec, "Unknown")}; profile={FormatOptionalValue(telemetry.Profile, "Unknown")}; resolution={FormatResolution(telemetry.Width, telemetry.Height)}; pixel format={FormatOptionalValue(telemetry.PixelFormat, "Unknown")}",
+            $"Flags: trim={FormatNullableYesNo(telemetry.TrimUsed)}; burn timestamp={FormatNullableYesNo(telemetry.BurnTimestampUsed)}; split export={FormatNullableYesNo(telemetry.SplitExportUsed)}; exit code={FormatExitCode(telemetry.ExitCode)}; succeeded={FormatNullableYesNo(telemetry.Succeeded)}; canceled={FormatNullableYesNo(telemetry.Canceled)}"
+        };
+
+        if (!string.IsNullOrWhiteSpace(telemetry.FfmpegVersionLine))
+        {
+            lines.Add($"FFmpeg version: {telemetry.FfmpegVersionLine}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(telemetry.FfmpegConfigurationLine))
+        {
+            lines.Add($"FFmpeg configuration: {telemetry.FfmpegConfigurationLine}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(telemetry.Libx264VersionLine))
+        {
+            lines.Add($"libx264: {telemetry.Libx264VersionLine}");
+        }
+
+        if (telemetry.X264SummaryLines?.Count > 0)
+        {
+            lines.Add("x264 summary:");
+            lines.AddRange(telemetry.X264SummaryLines);
+        }
+
+        return lines;
     }
 
     private static string FormatExitCode(int? exitCode)
@@ -5041,6 +5184,32 @@ public sealed class MainForm : Form
             : duration.Value.ToString(@"mm\:ss", System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    private static string FormatNullableYesNo(bool? value)
+    {
+        return value.HasValue ? FormatYesNo(value.Value) : "Unknown";
+    }
+
+    private static string FormatDouble(double? value, string format)
+    {
+        return value.HasValue
+            ? value.Value.ToString(format, System.Globalization.CultureInfo.InvariantCulture)
+            : "Unknown";
+    }
+
+    private static string FormatSpeedX(double? value)
+    {
+        return value.HasValue
+            ? $"{value.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)}x"
+            : "Unknown";
+    }
+
+    private static string FormatBitrate(double? kbps)
+    {
+        return kbps.HasValue
+            ? $"{kbps.Value.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture)} kb/s"
+            : "Unknown";
+    }
+
     private static string FormatYesNo(bool value)
     {
         return value ? "Yes" : "No";
@@ -5069,6 +5238,11 @@ public sealed class MainForm : Form
         }
 
         return $"{bytes / 1024D / 1024D:0.##} MB";
+    }
+
+    private static string FormatFileSize(long? bytes)
+    {
+        return bytes.HasValue ? FormatFileSize(bytes.Value) : "Unknown";
     }
 
     private static void AddMessageLines(List<string> lines, string message)
@@ -5524,6 +5698,39 @@ public sealed class MainForm : Form
         {
             RegisterQueueDeselectHandlers(child);
         }
+    }
+
+    private void ConfigureConversionModeComboBox(ComboBox comboBox)
+    {
+        comboBox.DrawMode = DrawMode.OwnerDrawFixed;
+        comboBox.DrawItem += (_, e) =>
+        {
+            e.DrawBackground();
+            if (e.Index < 0 || e.Index >= comboBox.Items.Count)
+            {
+                return;
+            }
+
+            var text = comboBox.Items[e.Index]?.ToString() ?? string.Empty;
+            var disabled = !nvencCapability.IsAvailable &&
+                string.Equals(text, ConversionModes.FullNvencDisplayName, StringComparison.OrdinalIgnoreCase);
+            var color = disabled ? SystemColors.GrayText : e.ForeColor;
+            TextRenderer.DrawText(e.Graphics, text, e.Font ?? comboBox.Font, e.Bounds, color, TextFormatFlags.VerticalCenter | TextFormatFlags.Left);
+            e.DrawFocusRectangle();
+        };
+    }
+
+    private bool GuardUnavailableNvencSelection(ComboBox comboBox)
+    {
+        if (nvencCapability.IsAvailable ||
+            !string.Equals(comboBox.SelectedItem?.ToString(), ConversionModes.FullNvencDisplayName, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        comboBox.SelectedItem = ConversionModes.FullDisplayName;
+        technicalLog.Append($"Full NVENC unavailable. {nvencCapability.DiagnosticSummary}");
+        return true;
     }
 
     private static ComboBox CreateComboBox(string[] items, string selectedItem)

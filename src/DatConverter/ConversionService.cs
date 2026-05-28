@@ -5,6 +5,7 @@ namespace DatConverter;
 public sealed class ConversionService
 {
     private static readonly TimeSpan ConversionTimeout = TimeSpan.FromHours(12);
+    public const string NvencUnavailableMessage = "Full NVENC requires a supported NVIDIA GPU and FFmpeg NVENC support. Try Full mode instead.";
 
     private readonly FfmpegTools ffmpegTools;
     private readonly InternalConversionPathOptions internalOptions;
@@ -109,6 +110,39 @@ public sealed class ConversionService
             "Encode",
             "Full conversion completed.",
             ConversionResult.FullFailedMessage,
+            duration,
+            progress,
+            cancellationToken,
+            ConversionInputPathMode.StandardWholeDatRawH264);
+        return AppendBurnTimestampFontWarning(result, burnTimestamp);
+    }
+
+    public async Task<ConversionResult> EncodeNvencAsync(
+        string inputPath,
+        string outputPath,
+        OutputFormat outputFormat,
+        FpsOption fps,
+        TimeSpan? duration,
+        IProgress<ConversionProgress>? progress,
+        CancellationToken cancellationToken,
+        ContainerMetadata? metadata = null,
+        BurnTimestampOptions? burnTimestamp = null)
+    {
+        if (!HasResolvedFps(fps))
+        {
+            return BuildUnresolvedFpsResult(inputPath, outputPath, outputFormat, fps, ConversionModes.EncodeNvenc, duration);
+        }
+
+        var arguments = FfmpegCommandBuilder.BuildNvencEncodeArguments(inputPath, outputPath, outputFormat, fps, metadata, burnTimestamp);
+        var result = await RunConversionAsync(
+            inputPath,
+            outputPath,
+            outputFormat,
+            fps,
+            arguments,
+            ConversionModes.EncodeNvenc,
+            "Full NVENC conversion completed.",
+            NvencUnavailableMessage,
             duration,
             progress,
             cancellationToken,
@@ -416,6 +450,99 @@ public sealed class ConversionService
         }
     }
 
+    public async Task<ConversionResult> EncodeTrimmedNvencAsync(
+        string inputPath,
+        string outputPath,
+        OutputFormat outputFormat,
+        FpsOption fps,
+        TimeSpan? sourceDuration,
+        TrimRange trimRange,
+        IProgress<ConversionProgress>? progress,
+        CancellationToken cancellationToken,
+        ContainerMetadata? metadata = null,
+        BurnTimestampOptions? burnTimestamp = null)
+    {
+        if (!HasResolvedFps(fps))
+        {
+            return BuildUnresolvedFpsResult(inputPath, outputPath, outputFormat, fps, ConversionModes.EncodeNvenc, trimRange.End - trimRange.Start);
+        }
+
+        if (!trimRange.TryValidate(sourceDuration, out var validationMessage))
+        {
+            return BuildTrimFailureResult(inputPath, outputPath, outputFormat, fps, trimRange, validationMessage ?? "Trim range is invalid.", conversionMode: ConversionModes.EncodeNvenc);
+        }
+
+        var guardResult = BuildOutputGuardResult(inputPath, outputPath, outputFormat, fps, Array.Empty<string>(), ConversionModes.EncodeNvenc, trimRange.End - trimRange.Start);
+        if (guardResult is not null)
+        {
+            return guardResult;
+        }
+
+        var tempH264Path = BuildTempH264Path(outputPath, "trim-nvenc-encode");
+        try
+        {
+            ReportPreparationProgress(progress);
+            var extractionResult = await Task.Run(
+                () => extractTrimmedH264(inputPath, trimRange.Start, trimRange.End, sourceDuration, tempH264Path, cancellationToken),
+                cancellationToken);
+            if (!extractionResult.Succeeded || string.IsNullOrWhiteSpace(extractionResult.OutputPath))
+            {
+                TryDeleteFile(outputPath);
+                return BuildTrimFailureResult(inputPath, outputPath, outputFormat, fps, trimRange, $"Trim Video could not be applied. {extractionResult.FailureReason ?? "No trimmed H.264 data was produced."}", extractionResult.TechnicalDetails, ConversionModes.EncodeNvenc);
+            }
+
+            var preRoll = CalculatePreRoll(trimRange.Start, extractionResult.SelectedKeyframeLocalOffset);
+            var arguments = FfmpegCommandBuilder.BuildTrimNvencEncodeArguments(tempH264Path, outputPath, outputFormat, fps, preRoll, trimRange.End - trimRange.Start, metadata, burnTimestamp);
+            ReportEncodeStartProgress(progress);
+            var result = await RunConversionAsync(
+                inputPath,
+                outputPath,
+                outputFormat,
+                fps,
+                arguments,
+                ConversionModes.EncodeNvenc,
+                "Full NVENC trimmed conversion completed.",
+                NvencUnavailableMessage,
+                trimRange.End - trimRange.Start,
+                progress,
+                cancellationToken,
+                ConversionInputPathMode.TrimmedCleanH264);
+
+            var resultWithFontWarning = AppendBurnTimestampFontWarning(result, burnTimestamp);
+            return resultWithFontWarning with
+            {
+                StandardError = PrependTechnicalNote(
+                    resultWithFontWarning.StandardError,
+                    BuildTrimEncodeTechnicalNote(trimRange, preRoll, extractionResult))
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            TryDeleteFile(outputPath);
+            return new ConversionResult(
+                false,
+                ConversionResult.CanceledMessage,
+                ffmpegTools.FfmpegPath,
+                Array.Empty<string>(),
+                inputPath,
+                outputPath,
+                fps,
+                null,
+                "",
+                "Trimmed Full NVENC conversion canceled during DAT frame extraction.",
+                ConversionMode: ConversionModes.EncodeNvenc,
+                OutputFormat: outputFormat.DisplayName(),
+                WasCanceled: true,
+                Duration: trimRange.End - trimRange.Start,
+                UsedDeterminateProgress: true,
+                InputPathMode: ConversionInputPathMode.TrimmedCleanH264);
+        }
+        finally
+        {
+            TryDeleteFile(tempH264Path);
+        }
+    }
+
     public async Task<ConversionResult> EncodeTrimmedSplitAsync(
         string inputPath,
         string outputPath,
@@ -531,6 +658,138 @@ public sealed class ConversionService
                 "",
                 "Trimmed split Full conversion canceled during DAT frame extraction.",
                 ConversionMode: "Encode",
+                OutputFormat: outputFormat.DisplayName(),
+                WasCanceled: true,
+                Duration: trimRange.End - trimRange.Start,
+                UsedDeterminateProgress: true,
+                InputPathMode: ConversionInputPathMode.TrimmedCleanH264);
+        }
+        finally
+        {
+            foreach (var path in segmentTempPaths)
+            {
+                TryDeleteFile(path);
+            }
+
+            TryDeleteFile(combinedTempPath);
+        }
+    }
+
+    public async Task<ConversionResult> EncodeTrimmedSplitNvencAsync(
+        string inputPath,
+        string outputPath,
+        OutputFormat outputFormat,
+        FpsOption fps,
+        SpotterSplitExportPlan plan,
+        RecordingTimeline timeline,
+        TrimRange trimRange,
+        CancellationToken cancellationToken,
+        ContainerMetadata? metadata = null,
+        BurnTimestampOptions? burnTimestamp = null,
+        IProgress<ConversionProgress>? progress = null)
+    {
+        if (!HasResolvedFps(fps))
+        {
+            return BuildUnresolvedFpsResult(inputPath, outputPath, outputFormat, fps, ConversionModes.EncodeNvenc, trimRange.End - trimRange.Start);
+        }
+
+        if (!plan.IsStrongConfidence)
+        {
+            return BuildTrimFailureResult(inputPath, outputPath, outputFormat, fps, trimRange, "Split recording could not be verified.", conversionMode: ConversionModes.EncodeNvenc);
+        }
+
+        if (!trimRange.TryValidate(timeline.TotalDuration, out var validationMessage))
+        {
+            return BuildTrimFailureResult(inputPath, outputPath, outputFormat, fps, trimRange, validationMessage ?? "Trim range is invalid.", conversionMode: ConversionModes.EncodeNvenc);
+        }
+
+        var guardResult = BuildOutputGuardResult(inputPath, outputPath, outputFormat, fps, Array.Empty<string>(), ConversionModes.EncodeNvenc, trimRange.End - trimRange.Start);
+        if (guardResult is not null)
+        {
+            return guardResult;
+        }
+
+        var combinedTempPath = BuildTempH264Path(outputPath, "trimmed-split-nvenc-encode");
+        var segmentTempPaths = new List<string>();
+        var technicalDetails = new List<string>();
+        var preRoll = TimeSpan.Zero;
+        var capturedFirstPreRoll = false;
+        try
+        {
+            ReportPreparationProgress(progress);
+            using (var combinedStream = new FileStream(combinedTempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                foreach (var segment in GetTrimmedSegments(timeline, trimRange))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var segmentTempPath = BuildTempH264Path(outputPath, $"trimmed-nvenc-encode-segment-{segment.SegmentIndex:000}");
+                    segmentTempPaths.Add(segmentTempPath);
+                    var extractionResult = await Task.Run(
+                        () => extractTrimmedH264(segment.SourcePath, segment.LocalStart, segment.LocalEnd, segment.Duration, segmentTempPath, cancellationToken),
+                        cancellationToken);
+                    technicalDetails.Add(extractionResult.TechnicalDetails);
+                    if (!extractionResult.Succeeded || string.IsNullOrWhiteSpace(extractionResult.OutputPath))
+                    {
+                        TryDeleteFile(outputPath);
+                        return BuildTrimFailureResult(inputPath, outputPath, outputFormat, fps, trimRange, $"Trim Video could not be applied to split segment: {Path.GetFileName(segment.SourcePath)}. {extractionResult.FailureReason ?? "No trimmed H.264 data was produced."}", string.Join(Environment.NewLine, technicalDetails), ConversionModes.EncodeNvenc);
+                    }
+
+                    if (!capturedFirstPreRoll)
+                    {
+                        var selectedKeyframe = extractionResult.SelectedKeyframeLocalOffset ?? segment.LocalStart;
+                        preRoll = CalculatePreRoll(trimRange.Start, segment.GlobalStart + selectedKeyframe);
+                        capturedFirstPreRoll = true;
+                    }
+
+                    using var segmentStream = new FileStream(extractionResult.OutputPath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                    segmentStream.CopyTo(combinedStream);
+                }
+            }
+
+            if (TryGetFileLength(combinedTempPath) <= 0)
+            {
+                return BuildTrimFailureResult(inputPath, outputPath, outputFormat, fps, trimRange, "Trim Video could not be applied. No split segment payloads were selected.", string.Join(Environment.NewLine, technicalDetails), ConversionModes.EncodeNvenc);
+            }
+
+            var arguments = FfmpegCommandBuilder.BuildTrimNvencEncodeArguments(combinedTempPath, outputPath, outputFormat, fps, preRoll, trimRange.End - trimRange.Start, metadata, burnTimestamp);
+            ReportEncodeStartProgress(progress);
+            var result = await RunConversionAsync(
+                inputPath,
+                outputPath,
+                outputFormat,
+                fps,
+                arguments,
+                ConversionModes.EncodeNvenc,
+                "Full NVENC trimmed conversion completed.",
+                NvencUnavailableMessage,
+                trimRange.End - trimRange.Start,
+                progress,
+                cancellationToken,
+                ConversionInputPathMode.TrimmedCleanH264);
+
+            var resultWithFontWarning = AppendBurnTimestampFontWarning(result, burnTimestamp);
+            return resultWithFontWarning with
+            {
+                StandardError = PrependTechnicalNote(
+                    resultWithFontWarning.StandardError,
+                    BuildSplitTrimEncodeTechnicalNote(trimRange, preRoll, technicalDetails))
+            };
+        }
+        catch (OperationCanceledException)
+        {
+            TryDeleteFile(outputPath);
+            return new ConversionResult(
+                false,
+                ConversionResult.CanceledMessage,
+                ffmpegTools.FfmpegPath,
+                Array.Empty<string>(),
+                inputPath,
+                outputPath,
+                fps,
+                null,
+                "",
+                "Trimmed split Full NVENC conversion canceled during DAT frame extraction.",
+                ConversionMode: ConversionModes.EncodeNvenc,
                 OutputFormat: outputFormat.DisplayName(),
                 WasCanceled: true,
                 Duration: trimRange.End - trimRange.Start,
@@ -717,8 +976,24 @@ public sealed class ConversionService
             null);
         stopwatch.Stop();
         var processingTime = stopwatch.Elapsed;
+        var succeeded = processResult.ExitCode == 0 && TryGetFileLength(outputPath) > 0;
+        var telemetry = ConversionTelemetry.Build(
+            inputPath,
+            outputPath,
+            outputFormat,
+            conversionMode,
+            fps,
+            duration,
+            processingTime,
+            processResult.ExitCode,
+            succeeded,
+            processResult.WasCanceled,
+            processResult.StandardError,
+            progressParser.LastProgress,
+            inputPathMode,
+            arguments);
 
-        if (processResult.ExitCode == 0 && TryGetFileLength(outputPath) > 0)
+        if (succeeded)
         {
             return new ConversionResult(
                 true,
@@ -737,7 +1012,8 @@ public sealed class ConversionService
                 Duration: duration,
                 UsedDeterminateProgress: duration.HasValue,
                 ProcessingTime: processingTime,
-                InputPathMode: inputPathMode);
+                InputPathMode: inputPathMode,
+                Telemetry: telemetry);
         }
 
         var partialOutputMessage = processResult.WasCanceled
@@ -765,14 +1041,25 @@ public sealed class ConversionService
             duration,
             duration.HasValue,
             processingTime,
-            inputPathMode);
+            inputPathMode,
+            telemetry);
     }
 
     private static string ResolveConversionFailureMessage(IReadOnlyList<string> arguments, string failureMessage)
     {
+        if (UsesNvencEncoder(arguments))
+        {
+            return NvencUnavailableMessage;
+        }
+
         return UsesBurnTimestampFilter(arguments)
             ? BurnTimestampMetadataBuilder.BundledFfmpegUnavailableMessage
             : failureMessage;
+    }
+
+    private static bool UsesNvencEncoder(IReadOnlyList<string> arguments)
+    {
+        return arguments.Any(argument => string.Equals(argument, "h264_nvenc", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool UsesBurnTimestampFilter(IReadOnlyList<string> arguments)
