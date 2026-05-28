@@ -46,6 +46,11 @@ public static class OutputPathService
 
     public static string? GetDirectOutputPath(string? inputFilePath, string? outputFolderPath, OutputFormat outputFormat)
     {
+        return GetDirectOutputPath(inputFilePath, outputFolderPath, outputFormat, baseNameSuffix: null);
+    }
+
+    public static string? GetDirectOutputPath(string? inputFilePath, string? outputFolderPath, OutputFormat outputFormat, string? baseNameSuffix)
+    {
         if (string.IsNullOrWhiteSpace(inputFilePath) || string.IsNullOrWhiteSpace(outputFolderPath))
         {
             return null;
@@ -62,7 +67,7 @@ public static class OutputPathService
             return null;
         }
 
-        var outputPath = Path.Combine(outputFolderPath, inputBaseName + outputFormat.Extension());
+        var outputPath = Path.Combine(outputFolderPath, inputBaseName + SanitizeBaseNameSuffix(baseNameSuffix) + outputFormat.Extension());
         return IsSafeOutputPath(inputFilePath, outputPath) ? outputPath : null;
     }
 
@@ -73,7 +78,18 @@ public static class OutputPathService
         Func<string, bool> isCandidateAllowed,
         bool allowExistingDirectOutput = true)
     {
-        var directOutputPath = GetDirectOutputPath(inputFilePath, outputFolderPath, outputFormat);
+        return PlanUniqueOutputPath(inputFilePath, outputFolderPath, outputFormat, isCandidateAllowed, allowExistingDirectOutput, baseNameSuffix: null);
+    }
+
+    public static string? PlanUniqueOutputPath(
+        string? inputFilePath,
+        string? outputFolderPath,
+        OutputFormat outputFormat,
+        Func<string, bool> isCandidateAllowed,
+        bool allowExistingDirectOutput,
+        string? baseNameSuffix)
+    {
+        var directOutputPath = GetDirectOutputPath(inputFilePath, outputFolderPath, outputFormat, baseNameSuffix);
         if (string.IsNullOrWhiteSpace(directOutputPath))
         {
             return null;
@@ -91,6 +107,7 @@ public static class OutputPathService
         }
 
         var inputBaseName = Path.GetFileNameWithoutExtension(inputFilePath);
+        var sanitizedSuffix = SanitizeBaseNameSuffix(baseNameSuffix);
         var extension = outputFormat.Extension();
         if (string.IsNullOrWhiteSpace(inputBaseName) || string.IsNullOrWhiteSpace(extension))
         {
@@ -99,7 +116,7 @@ public static class OutputPathService
 
         for (var index = 1; index <= 999; index++)
         {
-            var candidate = Path.Combine(outputFolderPath, $"{inputBaseName}_{index:00}{extension}");
+            var candidate = Path.Combine(outputFolderPath, $"{inputBaseName}{sanitizedSuffix}_{index:00}{extension}");
             if (IsSafeOutputPath(inputFilePath, candidate) &&
                 !File.Exists(candidate) &&
                 isCandidateAllowed(candidate))
@@ -109,6 +126,17 @@ public static class OutputPathService
         }
 
         return null;
+    }
+
+    private static string SanitizeBaseNameSuffix(string? suffix)
+    {
+        if (string.IsNullOrWhiteSpace(suffix))
+        {
+            return "";
+        }
+
+        var invalid = Path.GetInvalidFileNameChars();
+        return new string(suffix.Select(character => invalid.Contains(character) ? '_' : character).ToArray());
     }
 
     public static CustomOutputPathValidationResult ValidateCustomOutputPath(

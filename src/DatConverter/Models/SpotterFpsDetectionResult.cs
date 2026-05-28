@@ -1,19 +1,19 @@
 namespace DatConverter;
 
-public sealed class MirasysFpsDetectionResult
+public sealed class SpotterFpsDetectionResult
 {
     public bool Succeeded { get; init; }
     public string FailureReason { get; init; } = "";
     public string DetectionSource { get; init; } = "";
     public string Confidence { get; init; } = "Low";
-    public MirasysFpsTechnicalDetails TechnicalDetails { get; init; } = new();
+    public SpotterFpsTechnicalDetails TechnicalDetails { get; init; } = new();
 
     public string BuildTechnicalLogText()
     {
         var details = TechnicalDetails;
         var lines = new List<string>
         {
-            $"Mirasys FPS detection succeeded: {Succeeded}",
+            $"Spotter FPS detection succeeded: {Succeeded}",
             $"Detection source: {FormatValue(DetectionSource)}",
             $"Confidence: {Confidence}"
         };

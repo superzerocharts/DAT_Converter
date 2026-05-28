@@ -1,6 +1,6 @@
 namespace DatConverter.Tests;
 
-public sealed class MirasysFpsDetectorTests
+public sealed class SpotterFpsDetectorTests
 {
     [Fact]
     public void Detect_WithValidSidecar_CalibratesKnownSampleShape()
@@ -11,7 +11,7 @@ public sealed class MirasysFpsDetectorTests
         WriteDat(datPath, BuildSampleShapeTimestamps());
         WriteSidecar(sefPath, 298.197);
 
-        var result = new MirasysFpsDetector().Detect(datPath, sefPath);
+        var result = new SpotterFpsDetector().Detect(datPath, sefPath);
 
         Assert.True(result.Succeeded, result.FailureReason);
         Assert.Equal("DatFrameRecordsWithSefDuration", result.DetectionSource);
@@ -36,12 +36,12 @@ public sealed class MirasysFpsDetectorTests
         var datPath = Path.Combine(temp.Path, "sample.dat");
         WriteDat(datPath, BuildSampleShapeTimestamps());
 
-        var result = new MirasysFpsDetector().Detect(datPath);
+        var result = new SpotterFpsDetector().Detect(datPath);
 
         Assert.True(result.Succeeded, result.FailureReason);
         Assert.Equal("DatFrameRecordsDefaultTimebase", result.DetectionSource);
         Assert.Equal("Medium", result.Confidence);
-        Assert.Equal(MirasysFpsDetector.DefaultTimebaseUnitsPerSecond, result.TechnicalDetails.TimebaseUnitsPerSecond);
+        Assert.Equal(SpotterFpsDetector.DefaultTimebaseUnitsPerSecond, result.TechnicalDetails.TimebaseUnitsPerSecond);
         Assert.InRange(result.TechnicalDetails.AverageFps!.Value, 29.89, 29.91);
         Assert.Contains(result.TechnicalDetails.Warnings, warning => warning.Contains("No .sef/.sef2", StringComparison.Ordinal));
     }
@@ -55,7 +55,7 @@ public sealed class MirasysFpsDetectorTests
         WriteDat(datPath, BuildConstantRateTimestamps(frameCount: 120, fps: 30, seconds: 4));
         File.WriteAllText(sefPath, "<archive2><start>bad</start><end>also bad</end></archive2>");
 
-        var result = new MirasysFpsDetector().Detect(datPath, sefPath);
+        var result = new SpotterFpsDetector().Detect(datPath, sefPath);
 
         Assert.True(result.Succeeded, result.FailureReason);
         Assert.Equal("DatFrameRecordsDefaultTimebase", result.DetectionSource);
@@ -70,7 +70,7 @@ public sealed class MirasysFpsDetectorTests
         var datPath = Path.Combine(temp.Path, "short.dat");
         WriteDat(datPath, new[] { 1000UL });
 
-        var result = new MirasysFpsDetector().Detect(datPath);
+        var result = new SpotterFpsDetector().Detect(datPath);
 
         Assert.False(result.Succeeded);
         Assert.Equal("Low", result.Confidence);
@@ -82,9 +82,9 @@ public sealed class MirasysFpsDetectorTests
     {
         using var temp = new TempDirectory();
         var datPath = Path.Combine(temp.Path, "invalid.dat");
-        File.WriteAllText(datPath, "not a mirasys frame record file");
+        File.WriteAllText(datPath, "not a spotter frame record file");
 
-        var result = new MirasysFpsDetector().Detect(datPath);
+        var result = new SpotterFpsDetector().Detect(datPath);
 
         Assert.False(result.Succeeded);
         Assert.Equal(0, result.TechnicalDetails.FrameCount);
@@ -98,10 +98,10 @@ public sealed class MirasysFpsDetectorTests
         var datPath = Path.Combine(temp.Path, "zero-timestamps.dat");
         WriteDat(datPath, Enumerable.Repeat(0UL, 120).ToArray());
 
-        var result = new MirasysFpsDetector().Detect(datPath);
+        var result = new SpotterFpsDetector().Detect(datPath);
 
         Assert.False(result.Succeeded);
-        Assert.Equal("Unable to calculate FPS from Mirasys timestamps.", result.FailureReason);
+        Assert.Equal("Unable to calculate FPS from Spotter timestamps.", result.FailureReason);
         Assert.Equal(120, result.TechnicalDetails.FrameCount);
         Assert.Contains("Unable to calculate FPS", result.BuildTechnicalLogText());
     }
@@ -117,7 +117,7 @@ public sealed class MirasysFpsDetectorTests
             return;
         }
 
-        var result = new MirasysFpsDetector().Detect(datPath, sefPath);
+        var result = new SpotterFpsDetector().Detect(datPath, sefPath);
 
         Assert.True(result.Succeeded, result.FailureReason);
         Assert.Equal(8916, result.TechnicalDetails.FrameCount);
@@ -136,7 +136,7 @@ public sealed class MirasysFpsDetectorTests
             return;
         }
 
-        var result = new MirasysFpsDetector().Detect(samplePath);
+        var result = new SpotterFpsDetector().Detect(samplePath);
 
         Assert.True(result.Succeeded, result.FailureReason);
         Assert.Equal("DatFrameRecordsDefaultTimebase", result.DetectionSource);
@@ -154,10 +154,10 @@ public sealed class MirasysFpsDetectorTests
             return;
         }
 
-        var result = new MirasysFpsDetector().Detect(datPath);
+        var result = new SpotterFpsDetector().Detect(datPath);
 
         Assert.False(result.Succeeded);
-        Assert.Equal("Unable to calculate FPS from Mirasys timestamps.", result.FailureReason);
+        Assert.Equal("Unable to calculate FPS from Spotter timestamps.", result.FailureReason);
         Assert.Equal(8916, result.TechnicalDetails.FrameCount);
     }
 
@@ -180,7 +180,7 @@ public sealed class MirasysFpsDetectorTests
 
     internal static ulong[] BuildConstantRateTimestamps(int frameCount, double fps, double seconds)
     {
-        var span = (ulong)Math.Round(seconds * MirasysFpsDetector.DefaultTimebaseUnitsPerSecond);
+        var span = (ulong)Math.Round(seconds * SpotterFpsDetector.DefaultTimebaseUnitsPerSecond);
         var timestamps = new ulong[frameCount];
         const ulong firstTimestamp = 1000000;
 

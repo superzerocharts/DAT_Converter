@@ -8,9 +8,9 @@ public sealed class FpsDecisionPolicyTests
         using var temp = new TempDirectory();
         var datPath = Path.Combine(temp.Path, "sample.dat");
         var sefPath = Path.Combine(temp.Path, "sample.sef2");
-        MirasysFpsDetectorTests.WriteDat(datPath, MirasysFpsDetectorTests.BuildSampleShapeTimestamps());
-        MirasysFpsDetectorTests.WriteSidecar(sefPath, 298.197);
-        var detection = new MirasysFpsDetector().Detect(datPath, sefPath);
+        SpotterFpsDetectorTests.WriteDat(datPath, SpotterFpsDetectorTests.BuildSampleShapeTimestamps());
+        SpotterFpsDetectorTests.WriteSidecar(sefPath, 298.197);
+        var detection = new SpotterFpsDetector().Detect(datPath, sefPath);
 
         var decision = new FpsDecisionPolicy().Decide(detection);
 
@@ -31,8 +31,8 @@ public sealed class FpsDecisionPolicyTests
     {
         using var temp = new TempDirectory();
         var datPath = Path.Combine(temp.Path, "sample.dat");
-        MirasysFpsDetectorTests.WriteDat(datPath, MirasysFpsDetectorTests.BuildSampleShapeTimestamps());
-        var detection = new MirasysFpsDetector().Detect(datPath);
+        SpotterFpsDetectorTests.WriteDat(datPath, SpotterFpsDetectorTests.BuildSampleShapeTimestamps());
+        var detection = new SpotterFpsDetector().Detect(datPath);
 
         var decision = new FpsDecisionPolicy().Decide(detection);
 
@@ -49,9 +49,9 @@ public sealed class FpsDecisionPolicyTests
         using var temp = new TempDirectory();
         var datPath = Path.Combine(temp.Path, "sample.dat");
         var sefPath = Path.Combine(temp.Path, "sample.sef2");
-        MirasysFpsDetectorTests.WriteDat(datPath, MirasysFpsDetectorTests.BuildSampleShapeTimestamps());
-        MirasysFpsDetectorTests.WriteSidecar(sefPath, 298.197);
-        var detection = new MirasysFpsDetector().Detect(datPath, sefPath);
+        SpotterFpsDetectorTests.WriteDat(datPath, SpotterFpsDetectorTests.BuildSampleShapeTimestamps());
+        SpotterFpsDetectorTests.WriteSidecar(sefPath, 298.197);
+        var detection = new SpotterFpsDetector().Detect(datPath, sefPath);
 
         var decision = new FpsDecisionPolicy().Decide(detection);
 
@@ -62,12 +62,12 @@ public sealed class FpsDecisionPolicyTests
     [Fact]
     public void Decide_WithClearSidecarCalibratedNtscEvidence_Selects2997()
     {
-        var detection = new MirasysFpsDetectionResult
+        var detection = new SpotterFpsDetectionResult
         {
             Succeeded = true,
             DetectionSource = "DatFrameRecordsWithSefDuration",
             Confidence = "High",
-            TechnicalDetails = new MirasysFpsTechnicalDetails
+            TechnicalDetails = new SpotterFpsTechnicalDetails
             {
                 FrameCount = 8991,
                 BucketCount = 300,
@@ -91,7 +91,7 @@ public sealed class FpsDecisionPolicyTests
     [Fact]
     public void Decide_WithDetectionFailure_UsesDefaultFallback()
     {
-        var detection = new MirasysFpsDetectionResult
+        var detection = new SpotterFpsDetectionResult
         {
             Succeeded = false,
             FailureReason = "Fewer than two valid records."
@@ -110,12 +110,12 @@ public sealed class FpsDecisionPolicyTests
     [Fact]
     public void Decide_WithHeavilyConflictingEvidence_ReturnsLowConfidenceFallback()
     {
-        var detection = new MirasysFpsDetectionResult
+        var detection = new SpotterFpsDetectionResult
         {
             Succeeded = true,
             DetectionSource = "DatFrameRecordsWithSefDuration",
             Confidence = "High",
-            TechnicalDetails = new MirasysFpsTechnicalDetails
+            TechnicalDetails = new SpotterFpsTechnicalDetails
             {
                 FrameCount = 900,
                 BucketCount = 30,
@@ -140,12 +140,12 @@ public sealed class FpsDecisionPolicyTests
     [Fact]
     public void Decide_WithUnstableBuckets_ReturnsLowConfidenceFallback()
     {
-        var detection = new MirasysFpsDetectionResult
+        var detection = new SpotterFpsDetectionResult
         {
             Succeeded = true,
             DetectionSource = "DatFrameRecordsWithSefDuration",
             Confidence = "High",
-            TechnicalDetails = new MirasysFpsTechnicalDetails
+            TechnicalDetails = new SpotterFpsTechnicalDetails
             {
                 FrameCount = 900,
                 BucketCount = 30,

@@ -66,11 +66,25 @@ public sealed class QueueItem
 
     public string? FpsTechnicalLogText { get; private set; }
 
+    public SpotterMultiFileExportContext? MultiFileExportContext { get; set; }
+
+    public SpotterSplitExportPlan? SplitExportPlan { get; set; }
+
+    public bool IsSplitRecording => SplitExportPlan?.IsStrongConfidence == true && SplitExportPlan.SegmentCount > 1;
+
+    public string? LogicalOutputBaseName { get; set; }
+
+    public TrimRange? TrimRange { get; set; }
+
+    public bool BurnTimestamp { get; set; }
+
     public bool HasExistingDirectOutput { get; set; }
 
     public string? CustomOutputPath { get; set; }
 
     public bool HasCustomOutputPath { get; set; }
+
+    public bool HasUserCustomOutputPath { get; set; }
 
     public bool HasCustomFormat { get; set; }
 
@@ -117,6 +131,7 @@ public sealed class QueueItem
     {
         CustomOutputPath = null;
         HasCustomOutputPath = false;
+        HasUserCustomOutputPath = false;
         HasCustomFormat = false;
         HasCustomMode = false;
         HasCustomFpsSetting = false;

@@ -1,6 +1,6 @@
 namespace DatConverter;
 
-public sealed class MirasysFpsTechnicalDetails
+public sealed class SpotterFpsTechnicalDetails
 {
     public int FrameCount { get; init; }
     public int H264KeyframeCount { get; init; }

@@ -38,7 +38,7 @@ public sealed class RealFolderQueueSmokeTests
         await ProbeAllEligibleItems(items, probeService);
 
         var normal = Find(items, "dvrfile00000001.dat");
-        var datOnly = Find(items, "mirasys_5min_sample_2.dat");
+        var datOnly = FindDatOnlyFiveMinuteSample(items);
         var corrupt = Find(items, "dvrfile00000001_corrupt_fps_timestamps.dat");
 
         AssertReadyWithExpectedSettings(normal, outputFormat, conversionMode);
@@ -105,7 +105,7 @@ public sealed class RealFolderQueueSmokeTests
         Assert.False(scan.StoppedBecauseTooManyFiles);
         Assert.Contains(scan.DatFiles, path => Path.GetFileName(path).Equals("dvrfile00000001.dat", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(scan.DatFiles, path => Path.GetFileName(path).Equals("dvrfile00000001_corrupt_fps_timestamps.dat", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(scan.DatFiles, path => Path.GetFileName(path).Equals("mirasys_5min_sample_2.dat", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(scan.DatFiles, IsDatOnlyFiveMinuteSamplePath);
 
         var tools = ToolPathService.ResolveBundledTools();
         Assert.True(tools.AreAvailable, $"Bundled FFmpeg tools are missing: {tools.FfmpegPath}; {tools.FfprobePath}");
@@ -124,7 +124,7 @@ public sealed class RealFolderQueueSmokeTests
         Assert.Equal(QueueItemStatus.Ready, normal.Status);
         Assert.Equal("Ready", normal.StatusText);
 
-        var datOnly = Find(items, "mirasys_5min_sample_2.dat");
+        var datOnly = FindDatOnlyFiveMinuteSample(items);
         Assert.Equal("Auto 30", datOnly.FpsDisplayLabel);
         Assert.Equal("30", datOnly.FfmpegRateValue);
         Assert.Equal(QueueItemStatus.Ready, datOnly.Status);
@@ -159,6 +159,41 @@ public sealed class RealFolderQueueSmokeTests
         Assert.Empty(QueueFpsValidationService.FindItemsRequiringManualFps(items));
     }
 
+    [Fact]
+    public void KnownGoodMultiSegmentFolder_AutoDetectResolvesEveryVideoSegment()
+    {
+        var folderPath = @"W:\Projects\Cam 8379 - 4 hr clip";
+        if (!Directory.Exists(folderPath))
+        {
+            return;
+        }
+
+        var scan = FolderScanService.ScanForDatFiles(folderPath, includeSubfolders: false, hardLimit: 100);
+        Assert.False(scan.StoppedBecauseTooManyFiles);
+        var segmentPaths = scan.DatFiles
+            .Where(path => Path.GetFileName(path).StartsWith("dvrfile", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        Assert.Equal(4, segmentPaths.Count);
+
+        var resolver = new QueueItemFpsResolver();
+        var fpsSettings = QueueItemFpsSettings.AutoDetect();
+        var items = segmentPaths
+            .Select(path => CreateQueueItem(path, OutputFormat.Mp4, "Remux", fpsSettings, resolver.ResolveQueueItemFps(path, fpsSettings)))
+            .ToList();
+
+        foreach (var item in items)
+        {
+            Assert.Equal("Auto 30", item.FpsDisplayLabel);
+            Assert.Equal("30", item.FfmpegRateValue);
+            Assert.False(item.RequiresManualFpsSelection);
+            Assert.True(item.HasResolvedFps);
+            Assert.NotEqual("Needs FPS", item.StatusText);
+        }
+
+        Assert.Empty(QueueFpsValidationService.FindItemsRequiringManualFps(items));
+    }
+
     private static IReadOnlyList<string> GetRequiredVideoSamplePaths(string folderPath)
     {
         var scan = FolderScanService.ScanForDatFiles(folderPath, includeSubfolders: true, hardLimit: 100);
@@ -167,7 +202,7 @@ public sealed class RealFolderQueueSmokeTests
         return new[]
         {
             RequirePath(scan.DatFiles, "dvrfile00000001.dat"),
-            RequirePath(scan.DatFiles, "mirasys_5min_sample_2.dat"),
+            RequirePath(scan.DatFiles, IsDatOnlyFiveMinuteSamplePath),
             RequirePath(scan.DatFiles, "dvrfile00000001_corrupt_fps_timestamps.dat")
         };
     }
@@ -209,9 +244,24 @@ public sealed class RealFolderQueueSmokeTests
         return paths.Single(path => Path.GetFileName(path).Equals(fileName, StringComparison.OrdinalIgnoreCase));
     }
 
+    private static string RequirePath(IEnumerable<string> paths, Func<string, bool> predicate)
+    {
+        return paths.Single(predicate);
+    }
+
     private static QueueItem Find(IEnumerable<QueueItem> items, string fileName)
     {
         return items.Single(item => Path.GetFileName(item.InputPath).Equals(fileName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static QueueItem FindDatOnlyFiveMinuteSample(IEnumerable<QueueItem> items)
+    {
+        return items.Single(item => IsDatOnlyFiveMinuteSamplePath(item.InputPath));
+    }
+
+    private static bool IsDatOnlyFiveMinuteSamplePath(string path)
+    {
+        return Path.GetFileName(path).EndsWith("_5min_sample_2.dat", StringComparison.OrdinalIgnoreCase);
     }
 
     private static void AssertReadyWithExpectedSettings(QueueItem item, OutputFormat outputFormat, string conversionMode)

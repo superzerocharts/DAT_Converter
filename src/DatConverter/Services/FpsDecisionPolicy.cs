@@ -14,7 +14,7 @@ public sealed class FpsDecisionPolicy
         new(30, "30")
     };
 
-    public FpsDecisionResult Decide(MirasysFpsDetectionResult detection)
+    public FpsDecisionResult Decide(SpotterFpsDetectionResult detection)
     {
         var warnings = detection.TechnicalDetails.Warnings.ToList();
         var technicalLogText = detection.BuildTechnicalLogText();
@@ -51,7 +51,7 @@ public sealed class FpsDecisionPolicy
     }
 
     private static FpsDecisionResult CreateFallback(
-        MirasysFpsDetectionResult detection,
+        SpotterFpsDetectionResult detection,
         IReadOnlyList<string> warnings,
         string technicalLogText,
         string reason)
@@ -113,8 +113,8 @@ public sealed class FpsDecisionPolicy
     }
 
     private static string DetermineConfidence(
-        MirasysFpsDetectionResult detection,
-        MirasysFpsTechnicalDetails details,
+        SpotterFpsDetectionResult detection,
+        SpotterFpsTechnicalDetails details,
         SupportedRate? selected,
         List<string> warnings,
         string reason)

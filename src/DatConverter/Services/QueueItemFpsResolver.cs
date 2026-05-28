@@ -2,21 +2,21 @@ namespace DatConverter;
 
 public sealed class QueueItemFpsResolver
 {
-    private readonly Func<string, string?, MirasysFpsDetectionResult> detect;
-    private readonly Func<MirasysFpsDetectionResult, FpsDecisionResult> decide;
+    private readonly Func<string, string?, SpotterFpsDetectionResult> detect;
+    private readonly Func<SpotterFpsDetectionResult, FpsDecisionResult> decide;
     private readonly Func<string, string?> findSidecar;
 
     public QueueItemFpsResolver()
         : this(
-            (datPath, sidecarPath) => new MirasysFpsDetector().Detect(datPath, sidecarPath),
+            (datPath, sidecarPath) => new SpotterFpsDetector().Detect(datPath, sidecarPath),
             detection => new FpsDecisionPolicy().Decide(detection),
-            MirasysSidecarLookup.FindSidecarForDat)
+            SpotterSidecarLookup.FindSidecarForDat)
     {
     }
 
     public QueueItemFpsResolver(
-        Func<string, string?, MirasysFpsDetectionResult> detect,
-        Func<MirasysFpsDetectionResult, FpsDecisionResult> decide,
+        Func<string, string?, SpotterFpsDetectionResult> detect,
+        Func<SpotterFpsDetectionResult, FpsDecisionResult> decide,
         Func<string, string?>? findSidecar = null)
     {
         this.detect = detect;
@@ -64,12 +64,12 @@ public sealed class QueueItemFpsResolver
             RequiresManualFpsSelection = false,
             AutoDetectionSucceeded = decision.AutoDetectionSucceeded,
             Confidence = decision.Confidence,
-            DecisionReason = "Detected from Mirasys frame records.",
+            DecisionReason = "Detected from Spotter frame records.",
             TechnicalLogText = decision.TechnicalLogText
         };
     }
 
-    private static string? BuildFallbackWarning(MirasysFpsDetectionResult detection, FpsDecisionResult decision)
+    private static string? BuildFallbackWarning(SpotterFpsDetectionResult detection, FpsDecisionResult decision)
     {
         if (!string.IsNullOrWhiteSpace(detection.FailureReason))
         {

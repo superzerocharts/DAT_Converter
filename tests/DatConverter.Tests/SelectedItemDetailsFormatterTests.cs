@@ -12,6 +12,11 @@ public sealed class SelectedItemDetailsFormatterTests
         "FFmpeg FPS value",
         "FPS confidence",
         "FPS note",
+        "Source type",
+        "Parts",
+        "Export segment",
+        "Split recording segments",
+        "Trim",
         "Probe status",
         "Conversion status",
         "Duration available",
@@ -118,7 +123,7 @@ public sealed class SelectedItemDetailsFormatterTests
             NominalConversionFps = 30,
             AutoDetectionSucceeded = true,
             Confidence = "High",
-            DecisionReason = "Detected from Mirasys frame records.",
+            DecisionReason = "Detected from Spotter frame records.",
             TechnicalLogText = "Average FPS: 29.900\r\nPer-second FPS: median=30"
         });
 
@@ -127,9 +132,54 @@ public sealed class SelectedItemDetailsFormatterTests
         Assert.Contains("Selected source FPS: Auto 30", lines);
         Assert.Contains("FFmpeg FPS value: 30", lines);
         Assert.Contains("FPS confidence: High", lines);
-        Assert.Contains("FPS note: Detected from Mirasys frame records.", lines);
+        Assert.Contains("FPS note: Detected from Spotter frame records.", lines);
         Assert.DoesNotContain(lines, line => line.Contains("29.900", StringComparison.Ordinal));
         Assert.DoesNotContain(lines, line => line.Contains("Per-second FPS", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BuildLines_MultiFileExportContext_ShowsSimpleSegmentNote()
+    {
+        var item = CreateItem("dvrfile00000002.dat", "dvrfile00000002.mp4");
+        item.MultiFileExportContext = new SpotterMultiFileExportContext
+        {
+            SidecarPath = Path.Combine(Path.GetTempPath(), "sample.sef2"),
+            SegmentNumber = 2,
+            SegmentCount = 4,
+            SegmentFileNames =
+            [
+                "dvrfile00000001.dat",
+                "dvrfile00000002.dat",
+                "dvrfile00000003.dat",
+                "dvrfile00000004.dat"
+            ]
+        };
+
+        var lines = SelectedItemDetailsFormatter.BuildLines(item);
+
+        Assert.Contains("Export segment: Multi-file export detected: segment 2 of 4.", lines);
+    }
+
+    [Fact]
+    public void BuildLines_SplitRecording_ShowsPartsAndSegmentList()
+    {
+        var item = CreateItem("dvrfile00000001.dat", "export.mp4");
+        item.SplitExportPlan = new SpotterSplitExportPlan
+        {
+            ExportFolder = Path.GetTempPath(),
+            Confidence = "Strong",
+            Segments =
+            [
+                new SpotterSplitExportSegment { SegmentNumber = 1, FileName = "dvrfile00000001.dat", FilePath = item.InputPath },
+                new SpotterSplitExportSegment { SegmentNumber = 2, FileName = "dvrfile00000002.dat", FilePath = Path.Combine(Path.GetTempPath(), "dvrfile00000002.dat") }
+            ]
+        };
+
+        var lines = SelectedItemDetailsFormatter.BuildLines(item);
+
+        Assert.Contains("Source type: Split recording", lines);
+        Assert.Contains("Parts: 2", lines);
+        Assert.Contains("Split recording segments: dvrfile00000001.dat, dvrfile00000002.dat", lines);
     }
 
     [Fact]

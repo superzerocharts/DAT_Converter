@@ -35,7 +35,6 @@ public sealed class AppSettingsService
             var settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? CreateDefault();
             settings = Normalize(settings);
             ApplyStartupControlDefaults(settings);
-            ApplyStartupWindowDefaults(settings);
             logMessage = $"Settings loaded. Path: {SettingsPath}";
             return settings;
         }
@@ -92,9 +91,9 @@ public sealed class AppSettingsService
             settings.WindowWidth = 960;
         }
 
-        if (settings.WindowHeight < 820)
+        if (settings.WindowHeight < 680)
         {
-            settings.WindowHeight = 820;
+            settings.WindowHeight = 680;
         }
 
         return settings;
@@ -106,12 +105,6 @@ public sealed class AppSettingsService
         settings.OutputFormat = "MP4";
         settings.ConversionMode = "Remux";
         settings.Fps = "Auto-detect";
-    }
-
-    private static void ApplyStartupWindowDefaults(AppSettings settings)
-    {
-        settings.WindowWidth = 960;
-        settings.WindowHeight = 820;
     }
 
     private static bool IsAutoDetectFps(string? value)

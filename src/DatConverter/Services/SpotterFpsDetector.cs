@@ -4,7 +4,7 @@ using System.Xml.Linq;
 
 namespace DatConverter;
 
-public sealed class MirasysFpsDetector
+public sealed class SpotterFpsDetector
 {
     public const double DefaultTimebaseUnitsPerSecond = 39062.5;
 
@@ -13,7 +13,7 @@ public sealed class MirasysFpsDetector
     private const int MinimumUsefulRecordCount = 2;
     private const uint MaximumPayloadSize = 100_000_000;
 
-    public MirasysFpsDetectionResult Detect(string datPath, string? sefPath = null)
+    public SpotterFpsDetectionResult Detect(string datPath, string? sefPath = null)
     {
         if (string.IsNullOrWhiteSpace(datPath))
         {
@@ -43,7 +43,7 @@ public sealed class MirasysFpsDetector
 
         if (records.Count < MinimumUsefulRecordCount)
         {
-            return CreateFailure("Fewer than two valid Mirasys H264/I264 frame records were found.", records);
+            return CreateFailure("Fewer than two valid Spotter H264/I264 frame records were found.", records);
         }
 
         records.Sort(static (left, right) => left.Offset.CompareTo(right.Offset));
@@ -52,7 +52,7 @@ public sealed class MirasysFpsDetector
         var lastTimestamp = records[^1].Timestamp;
         if (lastTimestamp <= firstTimestamp)
         {
-            return CreateFailure("Unable to calculate FPS from Mirasys timestamps.", records);
+            return CreateFailure("Unable to calculate FPS from Spotter timestamps.", records);
         }
 
         var warnings = new List<string>();
@@ -76,16 +76,16 @@ public sealed class MirasysFpsDetector
 
             if (string.IsNullOrWhiteSpace(sefPath))
             {
-                warnings.Add("No .sef/.sef2 sidecar was supplied; using default Mirasys timestamp timebase.");
+                warnings.Add("No .sef/.sef2 sidecar was supplied; using default Spotter timestamp timebase.");
             }
             else
             {
-                warnings.Add(sidecar.Warning ?? "The .sef/.sef2 sidecar was invalid; using default Mirasys timestamp timebase.");
+                warnings.Add(sidecar.Warning ?? "The .sef/.sef2 sidecar was invalid; using default Spotter timestamp timebase.");
             }
         }
 
         var details = BuildTechnicalDetails(records, firstTimestamp, lastTimestamp, timestampSpan, timebase, durationSeconds, warnings);
-        return new MirasysFpsDetectionResult
+        return new SpotterFpsDetectionResult
         {
             Succeeded = true,
             DetectionSource = detectionSource,
@@ -216,7 +216,7 @@ public sealed class MirasysFpsDetector
         }
     }
 
-    private static MirasysFpsTechnicalDetails BuildTechnicalDetails(
+    private static SpotterFpsTechnicalDetails BuildTechnicalDetails(
         IReadOnlyList<FrameRecord> records,
         ulong firstTimestamp,
         ulong lastTimestamp,
@@ -245,7 +245,7 @@ public sealed class MirasysFpsDetector
 
         AddEvidenceWarnings(records, positiveDeltas, instantFps, bucketCounts, stableBucketCounts, multipleResolutions, warnings);
 
-        return new MirasysFpsTechnicalDetails
+        return new SpotterFpsTechnicalDetails
         {
             FrameCount = records.Count,
             H264KeyframeCount = records.Count(record => record.MarkerKind == "H264"),
@@ -351,7 +351,7 @@ public sealed class MirasysFpsDetector
         }
     }
 
-    private static string GetDetectorConfidence(string detectionSource, MirasysFpsTechnicalDetails details)
+    private static string GetDetectorConfidence(string detectionSource, SpotterFpsTechnicalDetails details)
     {
         if (details.FrameCount < 60 || details.BucketCount < 3 || details.MultipleResolutionsDetected)
         {
@@ -363,14 +363,14 @@ public sealed class MirasysFpsDetector
             : "Medium";
     }
 
-    private static MirasysFpsDetectionResult CreateFailure(string reason, IReadOnlyList<FrameRecord>? records = null)
+    private static SpotterFpsDetectionResult CreateFailure(string reason, IReadOnlyList<FrameRecord>? records = null)
     {
-        return new MirasysFpsDetectionResult
+        return new SpotterFpsDetectionResult
         {
             Succeeded = false,
             FailureReason = reason,
             Confidence = "Low",
-            TechnicalDetails = new MirasysFpsTechnicalDetails
+            TechnicalDetails = new SpotterFpsTechnicalDetails
             {
                 FrameCount = records?.Count ?? 0,
                 H264KeyframeCount = records?.Count(record => record.MarkerKind == "H264") ?? 0,

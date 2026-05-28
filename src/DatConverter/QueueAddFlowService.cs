@@ -1,14 +1,25 @@
 namespace DatConverter;
 
-public enum FinishedQueueAddChoice
-{
-    Cancel,
-    ClearAndAdd,
-    KeepAndAdd
-}
-
 public static class QueueAddFlowService
 {
+    public static bool ShouldAutoClearBeforeAdd(IEnumerable<QueueItem> items, bool isQueueProcessing)
+    {
+        return !isQueueProcessing && HasOnlyFinishedItems(items);
+    }
+
+    public static QueueSettingsSnapshot CreateDefaultBatchOptionsAfterAutoClear()
+    {
+        return new QueueSettingsSnapshot(
+            OutputFormat.Mp4,
+            "Remux",
+            FpsOption.FromLabel("30"),
+            OutputDestinationMode.SameFolderAsSource,
+            null)
+        {
+            FpsSettings = QueueItemFpsSettings.AutoDetect()
+        };
+    }
+
     public static bool HasOnlyFinishedItems(IEnumerable<QueueItem> items)
     {
         var any = false;
@@ -29,6 +40,8 @@ public static class QueueAddFlowService
         return status is QueueItemStatus.Completed
             or QueueItemStatus.Skipped
             or QueueItemStatus.Failed
-            or QueueItemStatus.Canceled;
+            or QueueItemStatus.Canceled
+            or QueueItemStatus.Unsupported
+            or QueueItemStatus.Invalid;
     }
 }

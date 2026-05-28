@@ -2,16 +2,21 @@ namespace DatConverter;
 
 public sealed class MainForm : Form
 {
-    private const int DetailsExpandedHeight = 280;
-    private const int DefaultClientWidth = 960;
-    private const int DefaultClientHeight = 852;
-    private const int ActionRowHeight = 66;
+    private const int DetailsExpandedHeight = 220;
+    private const int DetailsFooterHeight = 54;
+    private const int DefaultWindowWidth = 1080;
+    private const int DefaultWindowHeight = 740;
+    private const int MinimumWindowWidth = 960;
+    private const int MinimumWindowHeight = 680;
+    private const int WindowScreenMargin = 40;
+    private const int ActionRowHeight = 54;
     private const int QueueStatusColumnWidth = 108;
     private const int QueueFileColumnWidth = 202;
     private const int QueueOutputColumnWidth = 278;
     private const int QueueFormatColumnWidth = 70;
     private const int QueueModeColumnWidth = 86;
     private const int QueueFpsColumnWidth = 70;
+    private const int QueueResolutionColumnWidth = 92;
     private const int QueueProgressColumnWidth = 109;
 
     private const string MissingToolsStatusMessage = "The app needs its tools folder in the same folder as DatConverter.exe.";
@@ -30,6 +35,7 @@ public sealed class MainForm : Form
     private readonly Button stopAfterCurrentButton;
     private readonly Button cancelQueueButton;
     private readonly Button removeSelectedQueueItemButton;
+    private readonly Button duplicateSelectedQueueItemButton;
     private readonly Button clearCompletedQueueButton;
     private readonly RadioButton sameFolderRadioButton;
     private readonly RadioButton chooseFolderRadioButton;
@@ -97,6 +103,42 @@ public sealed class MainForm : Form
         Bottom
     }
 
+    private sealed record QueueItemEditorSnapshot(
+        string PlannedOutputPath,
+        string ConversionMode,
+        TrimRange? TrimRange,
+        string? CustomOutputPath,
+        bool HasCustomOutputPath,
+        bool HasUserCustomOutputPath,
+        bool HasCustomMode,
+        bool BurnTimestamp)
+    {
+        public static QueueItemEditorSnapshot Capture(QueueItem item)
+        {
+            return new QueueItemEditorSnapshot(
+                item.PlannedOutputPath,
+                item.ConversionMode,
+                item.TrimRange,
+                item.CustomOutputPath,
+                item.HasCustomOutputPath,
+                item.HasUserCustomOutputPath,
+                item.HasCustomMode,
+                item.BurnTimestamp);
+        }
+
+        public void Restore(QueueItem item)
+        {
+            item.PlannedOutputPath = PlannedOutputPath;
+            item.ConversionMode = ConversionMode;
+            item.TrimRange = TrimRange;
+            item.CustomOutputPath = CustomOutputPath;
+            item.HasCustomOutputPath = HasCustomOutputPath;
+            item.HasUserCustomOutputPath = HasUserCustomOutputPath;
+            item.HasCustomMode = HasCustomMode;
+            item.BurnTimestamp = BurnTimestamp;
+        }
+    }
+
     private const int EmGetScrollPos = 0x04DD;
     private const int EmSetScrollPos = 0x04DE;
     private const int WmSetRedraw = 0x000B;
@@ -120,6 +162,58 @@ public sealed class MainForm : Form
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
+    public static Size GetClampedStartupWindowSize(Size requestedSize, Rectangle workingArea)
+    {
+        var maxWidth = Math.Max(MinimumWindowWidth, Math.Min(DefaultWindowWidth, workingArea.Width - (WindowScreenMargin * 2)));
+        var maxHeight = Math.Max(MinimumWindowHeight, Math.Min(DefaultWindowHeight, workingArea.Height - (WindowScreenMargin * 2)));
+        var width = Math.Clamp(requestedSize.Width <= 0 ? DefaultWindowWidth : requestedSize.Width, MinimumWindowWidth, maxWidth);
+        var height = Math.Clamp(requestedSize.Height <= 0 ? DefaultWindowHeight : requestedSize.Height, MinimumWindowHeight, maxHeight);
+        return new Size(width, height);
+    }
+
+    public static bool CanRemoveQueueItemForState(QueueItem item, QueueItem? currentQueueItem, bool isQueueProcessing)
+    {
+        return !isQueueProcessing &&
+               item != currentQueueItem &&
+               item.Status is not QueueItemStatus.Running and
+                   not QueueItemStatus.Probing and
+                   not QueueItemStatus.Converting;
+    }
+
+    public static int RemoveSelectedQueueItemsForState(
+        IList<QueueItem> queue,
+        IEnumerable<QueueItem> selectedItems,
+        QueueItem? currentQueueItem,
+        bool isQueueProcessing)
+    {
+        var removableItems = selectedItems
+            .Where(item => queue.Contains(item) && CanRemoveQueueItemForState(item, currentQueueItem, isQueueProcessing))
+            .Distinct()
+            .ToList();
+
+        foreach (var item in removableItems)
+        {
+            queue.Remove(item);
+        }
+
+        return removableItems.Count;
+    }
+
+    public static bool CanCopyQueueItemForState(QueueItem item, bool isQueueProcessing)
+    {
+        return !isQueueProcessing &&
+               item.Status is not QueueItemStatus.Probing and
+                   not QueueItemStatus.Converting and
+                   not QueueItemStatus.Running;
+    }
+
+    public static string GetQueueCopyActionText(QueueItem? item)
+    {
+        return item?.Status == QueueItemStatus.Completed
+            ? "Re-add"
+            : "Duplicate";
+    }
+
     public MainForm()
     {
         ffmpegTools = ToolPathService.ResolveBundledTools();
@@ -139,13 +233,14 @@ public sealed class MainForm : Form
         }
 
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(DefaultClientWidth, DefaultClientHeight);
-        ClientSize = new Size(
-            DefaultClientWidth,
-            DefaultClientHeight);
+        MinimumSize = new Size(MinimumWindowWidth, MinimumWindowHeight);
+        Size = GetClampedStartupWindowSize(
+            new Size(appSettings.WindowWidth, appSettings.WindowHeight),
+            Screen.PrimaryScreen?.WorkingArea ?? SystemInformation.WorkingArea);
         FormBorderStyle = FormBorderStyle.Sizable;
         MaximizeBox = true;
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        Resize += MainForm_Resize;
 
         isInitializing = true;
         selectedFilePathTextBox = CreateReadOnlyTextBox("No .dat file selected");
@@ -160,9 +255,11 @@ public sealed class MainForm : Form
         stopAfterCurrentButton.Size = new Size(230, 42);
         cancelQueueButton = CreateButton("Cancel Queue");
         cancelQueueButton.Size = new Size(180, 42);
-        removeSelectedQueueItemButton = CreateButton("Clear All");
+        removeSelectedQueueItemButton = CreateButton("Remove");
         removeSelectedQueueItemButton.Size = new Size(216, 42);
-        clearCompletedQueueButton = CreateButton("Clear Completed");
+        duplicateSelectedQueueItemButton = CreateButton("Duplicate");
+        duplicateSelectedQueueItemButton.Size = new Size(216, 42);
+        clearCompletedQueueButton = CreateButton("Clear");
         clearCompletedQueueButton.Size = new Size(212, 42);
         sameFolderRadioButton = new RadioButton
         {
@@ -237,6 +334,7 @@ public sealed class MainForm : Form
         stopAfterCurrentButton.Enabled = false;
         cancelQueueButton.Enabled = false;
         removeSelectedQueueItemButton.Enabled = false;
+        duplicateSelectedQueueItemButton.Enabled = false;
         clearCompletedQueueButton.Enabled = false;
         browseFileButton.Enabled = ffmpegTools.AreAvailable;
         browseFileButton.Click += BrowseFileButton_Click;
@@ -250,6 +348,7 @@ public sealed class MainForm : Form
         stopAfterCurrentButton.Click += StopAfterCurrentButton_Click;
         cancelQueueButton.Click += CancelQueueButton_Click;
         removeSelectedQueueItemButton.Click += RemoveSelectedQueueItemButton_Click;
+        duplicateSelectedQueueItemButton.Click += DuplicateSelectedQueueItemButton_Click;
         clearCompletedQueueButton.Click += ClearCompletedQueueButton_Click;
         sameFolderRadioButton.CheckedChanged += OutputDestinationRadioButton_CheckedChanged;
         chooseFolderRadioButton.CheckedChanged += OutputDestinationRadioButton_CheckedChanged;
@@ -662,20 +761,36 @@ public sealed class MainForm : Form
             return;
         }
 
+        var importPlan = new FolderImportPlanner().Build(scanResult.DatFiles);
+        var reviewChoice = ShowFolderImportReviewDialog(importPlan);
+        if (reviewChoice == FolderImportReviewChoice.Cancel)
+        {
+            technicalLog.Append("Folder import canceled by user.");
+            RefreshStatusLog("Folder import canceled. No files were added.");
+            return;
+        }
+
         var addSettings = GetQueueAddSettings();
-        var preview = CreateFolderQueueAddPreview(scanResult.DatFiles, addSettings);
-        technicalLog.Append($"Folder scan completed. Folder: {folderPath}; Include subfolders: {FormatYesNo(includeSubfolders)}; Found: {scanResult.DatFiles.Count}; Selected-format outputs already present: {preview.AlreadyConvertedSkippedCount}; Invalid: {preview.InvalidCount}; Output plan failures: {preview.OutputPlanFailedCount}; Will add: {preview.AddablePaths.Count}; Skipped/inaccessible folders: {scanResult.SkippedPaths.Count}.");
+        var pathsForPreview = reviewChoice == FolderImportReviewChoice.ImportEveryDatSeparately
+            ? importPlan.AllDatPaths
+            : importPlan.RecommendedSingleDatPaths;
+        var preview = CreateFolderQueueAddPreview(pathsForPreview, addSettings);
+        var recommendedSplitCount = reviewChoice == FolderImportReviewChoice.UseRecommendedImport
+            ? importPlan.RecommendedSplitPlans.Count
+            : 0;
+        technicalLog.Append($"Folder scan completed. Folder: {folderPath}; Include subfolders: {FormatYesNo(includeSubfolders)}; Found: {scanResult.DatFiles.Count}; Split recordings: {importPlan.SplitRecordingCount}; Single DAT files: {importPlan.SingleDatCount}; Ambiguous groups: {importPlan.AmbiguousItemCount}; Selected-format outputs already present: {preview.AlreadyConvertedSkippedCount}; Invalid: {preview.InvalidCount}; Output plan failures: {preview.OutputPlanFailedCount}; Will add single items: {preview.AddablePaths.Count}; Will add split items: {recommendedSplitCount}; Skipped/inaccessible folders: {scanResult.SkippedPaths.Count}.");
 
         var availableSlots = 100 - queueItems.Count;
-        if (preview.AddablePaths.Count > availableSlots)
+        var rowsToAdd = preview.AddablePaths.Count + recommendedSplitCount;
+        if (rowsToAdd > availableSlots)
         {
-            technicalLog.Append($"Folder scan add blocked by queue limit. Queue count: {queueItems.Count}; Available slots: {availableSlots}; Addable from scan: {preview.AddablePaths.Count}.");
+            technicalLog.Append($"Folder scan add blocked by queue limit. Queue count: {queueItems.Count}; Available slots: {availableSlots}; Addable rows from scan: {rowsToAdd}.");
             RefreshStatusLog(queueLimitMessage);
             MessageBox.Show(this, queueLimitMessage, "Add Folder", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
-        if (preview.AddablePaths.Count == 0)
+        if (rowsToAdd == 0)
         {
             var noAddMessage =
                 $"Found {scanResult.DatFiles.Count} .dat file{(scanResult.DatFiles.Count == 1 ? "" : "s")}, but none can be added.\r\n\r\n" +
@@ -687,16 +802,90 @@ public sealed class MainForm : Form
             return;
         }
 
-        var confirmResult = ShowFolderQueuePreviewDialog(scanResult.DatFiles.Count, preview, addSettings);
-
-        if (confirmResult != DialogResult.OK)
+        if (reviewChoice == FolderImportReviewChoice.UseRecommendedImport)
         {
-            technicalLog.Append("Folder scan add canceled by user.");
-            RefreshStatusLog("Folder scan canceled. No files were added.");
-            return;
+            await AddSplitExportPlansToQueueAsync(importPlan.RecommendedSplitPlans, addSettings);
         }
 
         await AddFilesToQueueAsync(preview.AddablePaths);
+    }
+
+    private FolderImportReviewChoice ShowFolderImportReviewDialog(FolderImportPlan importPlan)
+    {
+        var content = FolderImportReviewContentBuilder.Build(importPlan);
+        using var dialog = new Form
+        {
+            Text = content.Title,
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            ShowInTaskbar = false,
+            ClientSize = new Size(620, content.ShowsCombineQuestion ? 290 : 190),
+            Font = Font
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Padding = new Padding(18)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+
+        var summary = new Label
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = false,
+            Text = content.Text,
+            TextAlign = ContentAlignment.TopLeft
+        };
+
+        var buttons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            Padding = new Padding(0, 10, 0, 0)
+        };
+        var cancelButton = CreateButton("Cancel");
+        cancelButton.Size = new Size(100, 36);
+        var noButton = CreateButton("No");
+        noButton.Size = new Size(100, 36);
+        var yesButton = CreateButton("Yes");
+        yesButton.Size = new Size(100, 36);
+        var choice = FolderImportReviewChoice.Cancel;
+        cancelButton.Click += (_, _) =>
+        {
+            choice = FolderImportReviewChoice.Cancel;
+            dialog.DialogResult = DialogResult.Cancel;
+        };
+        noButton.Click += (_, _) =>
+        {
+            choice = FolderImportReviewChoice.ImportEveryDatSeparately;
+            dialog.DialogResult = DialogResult.OK;
+        };
+        yesButton.Click += (_, _) =>
+        {
+            choice = FolderImportReviewContent.MapYes(content.ShowsCombineQuestion);
+            dialog.DialogResult = DialogResult.OK;
+        };
+        buttons.Controls.Add(cancelButton);
+        if (content.ShowsCombineQuestion)
+        {
+            buttons.Controls.Add(noButton);
+        }
+
+        buttons.Controls.Add(yesButton);
+        root.Controls.Add(summary, 0, 0);
+        root.Controls.Add(buttons, 0, 1);
+        dialog.Controls.Add(root);
+        dialog.AcceptButton = yesButton;
+        dialog.CancelButton = cancelButton;
+        dialog.ShowDialog(this);
+        return choice;
     }
 
     private DialogResult ShowFolderQueuePreviewDialog(int foundCount, FolderQueueAddPreview preview, QueueSettingsSnapshot addSettings)
@@ -860,7 +1049,7 @@ public sealed class MainForm : Form
             MinimizeBox = false,
             MaximizeBox = false,
             ShowInTaskbar = false,
-            ClientSize = new Size(820, 356),
+            ClientSize = new Size(820, 480),
             Font = Font
         };
 
@@ -869,7 +1058,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             Padding = new Padding(16),
             ColumnCount = 3,
-            RowCount = 6
+            RowCount = 8
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -878,7 +1067,9 @@ public sealed class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
 
         var saveAsTextBox = new TextBox
@@ -892,6 +1083,83 @@ public sealed class MainForm : Form
         var formatComboBox = CreateComboBox(new[] { "MP4", "MKV" }, item.OutputFormat.DisplayName());
         var modeComboBox = CreateComboBox(new[] { "Fast", "Full" }, FormatConversionModeForDisplay(item.ConversionMode));
         var fpsComboBox = CreateComboBox(SourceFpsOptions.DisplayOrder, FormatFpsSettingForEditor(item.FpsSettings));
+        var originalEditorState = QueueItemEditorSnapshot.Capture(item);
+        var trimStateLabel = new Label
+        {
+            AutoSize = false,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Margin = new Padding(0, 0, 8, 0)
+        };
+        var trimModeNoteLabel = new Label
+        {
+            AutoSize = false,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = SystemColors.GrayText,
+            Text = TrimConversionPolicy.FastModeNote,
+            Margin = new Padding(0, 0, 8, 0)
+        };
+        var trimButton = CreateButton("Trim Video");
+        trimButton.Size = new Size(118, 36);
+        var clearTrimButton = CreateButton("Clear Trim");
+        clearTrimButton.Size = new Size(112, 36);
+        var trimButtonPanel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Right,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            Margin = new Padding(0, 6, 0, 0)
+        };
+        trimButtonPanel.Controls.Add(trimButton);
+        trimButtonPanel.Controls.Add(clearTrimButton);
+        var trimPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 2,
+            Margin = new Padding(0, 2, 0, 2)
+        };
+        trimPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        trimPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        trimPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        trimPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+        trimPanel.Controls.Add(trimStateLabel, 0, 0);
+        trimPanel.Controls.Add(trimModeNoteLabel, 0, 1);
+        trimPanel.Controls.Add(trimButtonPanel, 1, 0);
+        trimPanel.SetRowSpan(trimButtonPanel, 2);
+        var burnTimestampCheckBox = new CheckBox
+        {
+            AutoSize = false,
+            Dock = DockStyle.Fill,
+            Text = "Burn timestamp into video",
+            Checked = item.BurnTimestamp,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Margin = new Padding(0, 2, 0, 0)
+        };
+        var burnTimestampNoteLabel = new Label
+        {
+            AutoSize = false,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = SystemColors.GrayText,
+            Text = BurnTimestampMetadataBuilder.ReliabilityNote,
+            Margin = new Padding(22, 0, 0, 0),
+            Visible = true
+        };
+        var burnPanel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Margin = new Padding(0)
+        };
+        burnPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        burnPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        burnPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        burnPanel.Controls.Add(burnTimestampCheckBox, 0, 0);
+        burnPanel.Controls.Add(burnTimestampNoteLabel, 0, 1);
         var fpsMessageLabel = new Label
         {
             AutoSize = false,
@@ -914,10 +1182,89 @@ public sealed class MainForm : Form
         resetButton.Size = new Size(174, 42);
         resetButton.TextAlign = ContentAlignment.MiddleCenter;
         var isDetectingFps = false;
+        var hasManualOutputPathInDialog = item.HasUserCustomOutputPath;
+
+        void RefreshTrimUi()
+        {
+            if (item.TrimRange is null)
+            {
+                trimStateLabel.Text = "Full video will be converted.";
+                trimModeNoteLabel.Visible = false;
+                trimButton.Text = "Trim Video";
+                clearTrimButton.Visible = false;
+                modeComboBox.Enabled = true;
+                return;
+            }
+
+            modeComboBox.Enabled = true;
+            var timeline = RecordingTimelineBuilder.Build(item);
+            trimStateLabel.Text = $"Start {TrimRangeFormatter.FormatOffset(timeline, item.TrimRange.Start)} \u2192 End {TrimRangeFormatter.FormatOffset(timeline, item.TrimRange.End)}";
+            trimModeNoteLabel.Visible = true;
+            trimButton.Text = "Edit Trim";
+            clearTrimButton.Visible = true;
+        }
+
+        var burnTimeline = RecordingTimelineBuilder.Build(item);
+        var canBurnTimestampUseRecordingTime = burnTimeline.RecordingStart.HasValue;
+
+        void RefreshDefaultOutputPathForTrim()
+        {
+            if (item.HasUserCustomOutputPath || hasManualOutputPathInDialog)
+            {
+                return;
+            }
+
+            var outputFolderPath = item.OutputDestinationMode == OutputDestinationMode.SameFolderAsSource
+                ? Path.GetDirectoryName(item.InputPath)
+                : item.SelectedOutputFolder;
+            var outputFolderValidation = OutputFolderValidator.ValidateOutputFolder(outputFolderPath);
+            if (!outputFolderValidation.IsValid || string.IsNullOrWhiteSpace(outputFolderValidation.FolderPath))
+            {
+                return;
+            }
+
+            var plannedOutputPath = item.IsSplitRecording && item.SplitExportPlan is not null
+                ? PlanSplitRecordingOutputPath(item.SplitExportPlan, item.InputPath, outputFolderValidation.FolderPath, ParseOutputFormatDisplay(formatComboBox.SelectedItem?.ToString()), GetTrimOutputSuffix(item), ResolveLogicalOutputBaseName(item))
+                : PlanQueueOutputPath(item.InputPath, outputFolderValidation.FolderPath, ParseOutputFormatDisplay(formatComboBox.SelectedItem?.ToString()), item);
+            if (string.IsNullOrWhiteSpace(plannedOutputPath))
+            {
+                return;
+            }
+
+            item.PlannedOutputPath = plannedOutputPath;
+            if (item.IsSplitRecording)
+            {
+                item.CustomOutputPath = plannedOutputPath;
+                item.HasCustomOutputPath = true;
+            }
+            else
+            {
+                item.CustomOutputPath = null;
+                item.HasCustomOutputPath = false;
+            }
+
+            saveAsTextBox.Text = plannedOutputPath;
+        }
 
         void SetApplyAvailability()
         {
             applyButton.Enabled = !isDetectingFps;
+        }
+
+        void ApplyBurnTimestampModeUi()
+        {
+            var state = BurnTimestampUiPolicy.Evaluate(
+                ParseConversionModeDisplay(modeComboBox.SelectedItem?.ToString()),
+                canBurnTimestampUseRecordingTime,
+                burnTimestampCheckBox.Checked);
+            if (burnTimestampCheckBox.Checked != state.Checked)
+            {
+                burnTimestampCheckBox.Checked = state.Checked;
+            }
+
+            burnTimestampCheckBox.Enabled = state.Enabled;
+            burnTimestampNoteLabel.Text = state.Note;
+            burnTimestampNoteLabel.Visible = true;
         }
 
         void DisableAutoDetectForManualSelection()
@@ -974,8 +1321,44 @@ public sealed class MainForm : Form
             using var saveDialog = CreateSaveAsDialog(item, saveAsTextBox.Text, ParseOutputFormatDisplay(formatComboBox.SelectedItem?.ToString()));
             if (saveDialog.ShowDialog(dialog) == DialogResult.OK)
             {
+                hasManualOutputPathInDialog = true;
                 saveAsTextBox.Text = saveDialog.FileName;
             }
+        };
+
+        trimButton.Click += (_, _) =>
+        {
+            using var trimDialog = new TrimPreviewDialog(item, ffmpegTools, details => technicalLog.AppendBlock("Trim preview technical details", details));
+            if (trimDialog.ShowDialog(dialog) == DialogResult.OK)
+            {
+                item.TrimRange = trimDialog.SelectedTrimRange;
+
+                RefreshDefaultOutputPathForTrim();
+                RefreshTrimUi();
+                ApplyBurnTimestampModeUi();
+                RefreshDetailsText(DetailsScrollMode.Preserve);
+                RefreshStatusLog(item.TrimRange is null ? "Trim cleared. Full video will be converted." : TrimConversionPolicy.FastModeNote);
+            }
+        };
+
+        clearTrimButton.Click += (_, _) =>
+        {
+            item.TrimRange = null;
+            RefreshDefaultOutputPathForTrim();
+            RefreshTrimUi();
+            ApplyBurnTimestampModeUi();
+            RefreshDetailsText(DetailsScrollMode.Preserve);
+            RefreshStatusLog("Trim cleared. Full video will be converted.");
+        };
+
+        burnTimestampCheckBox.CheckedChanged += (_, _) =>
+        {
+            ApplyBurnTimestampModeUi();
+        };
+
+        modeComboBox.SelectedIndexChanged += (_, _) =>
+        {
+            ApplyBurnTimestampModeUi();
         };
 
         applyButton.Click += async (_, _) =>
@@ -986,6 +1369,7 @@ public sealed class MainForm : Form
                     ParseOutputFormatDisplay(formatComboBox.SelectedItem?.ToString()),
                     ParseConversionModeDisplay(modeComboBox.SelectedItem?.ToString()),
                     BuildFpsSettingsFromDisplay(fpsComboBox.SelectedItem?.ToString()),
+                    burnTimestampCheckBox.Checked,
                     dialog))
             {
                 dialog.DialogResult = DialogResult.OK;
@@ -1020,9 +1404,15 @@ public sealed class MainForm : Form
         root.Controls.Add(CreateLabel("Source FPS:"), 0, 3);
         root.Controls.Add(fpsComboBox, 1, 3);
         root.SetColumnSpan(fpsComboBox, 2);
-        root.Controls.Add(fpsMessageLabel, 1, 4);
+        root.Controls.Add(CreateLabel("Trim Video:"), 0, 4);
+        root.Controls.Add(trimPanel, 1, 4);
+        root.SetColumnSpan(trimPanel, 2);
+        root.Controls.Add(CreateLabel("Timestamp:"), 0, 5);
+        root.Controls.Add(burnPanel, 1, 5);
+        root.SetColumnSpan(burnPanel, 2);
+        root.Controls.Add(fpsMessageLabel, 1, 6);
         root.SetColumnSpan(fpsMessageLabel, 2);
-        root.Controls.Add(buttonPanel, 0, 5);
+        root.Controls.Add(buttonPanel, 0, 7);
         root.SetColumnSpan(buttonPanel, 3);
 
         dialog.Controls.Add(root);
@@ -1041,7 +1431,17 @@ public sealed class MainForm : Form
         }
 
         SetApplyAvailability();
-        return dialog.ShowDialog(this) == DialogResult.OK;
+        RefreshTrimUi();
+        ApplyBurnTimestampModeUi();
+        var accepted = dialog.ShowDialog(this) == DialogResult.OK;
+        if (!accepted)
+        {
+            originalEditorState.Restore(item);
+            RefreshQueueGrid();
+            RefreshDetailsText(DetailsScrollMode.Preserve);
+        }
+
+        return accepted;
     }
 
     private SaveFileDialog CreateSaveAsDialog(QueueItem item, string currentOutputPath)
@@ -1102,6 +1502,7 @@ public sealed class MainForm : Form
 
         item.CustomOutputPath = validation.OutputPath;
         item.HasCustomOutputPath = true;
+        item.HasUserCustomOutputPath = true;
         item.PlannedOutputPath = validation.OutputPath;
         item.ConversionResult = null;
         item.ResultStatusSummary = null;
@@ -1138,16 +1539,19 @@ public sealed class MainForm : Form
         OutputFormat outputFormat,
         string conversionMode,
         QueueItemFpsSettings fpsSettings,
+        bool burnTimestamp,
         IWin32Window owner)
     {
         var outputPathChanged = !string.Equals(requestedOutputPath?.Trim(), item.PlannedOutputPath, StringComparison.OrdinalIgnoreCase);
         var formatChanged = outputFormat != item.OutputFormat;
-        var modeChanged = !string.Equals(conversionMode, item.ConversionMode, StringComparison.OrdinalIgnoreCase);
+        var resolvedConversionMode = conversionMode;
+        var modeChanged = !string.Equals(resolvedConversionMode, item.ConversionMode, StringComparison.OrdinalIgnoreCase);
         var fpsChanged = !AreFpsSettingsEquivalent(fpsSettings, item.FpsSettings);
 
         string? plannedOutputPath;
         string? customOutputPath;
-        var hasCustomOutputPath = item.HasCustomOutputPath || !string.IsNullOrWhiteSpace(item.CustomOutputPath);
+        var hasCustomOutputPath = item.HasUserCustomOutputPath &&
+                                  (item.HasCustomOutputPath || !string.IsNullOrWhiteSpace(item.CustomOutputPath));
 
         if (outputPathChanged || hasCustomOutputPath)
         {
@@ -1190,7 +1594,9 @@ public sealed class MainForm : Form
                 return false;
             }
 
-            plannedOutputPath = PlanQueueOutputPath(item.InputPath, outputFolderValidation.FolderPath, outputFormat, item);
+            plannedOutputPath = item.IsSplitRecording && item.SplitExportPlan is not null
+                ? PlanSplitRecordingOutputPath(item.SplitExportPlan, item.InputPath, outputFolderValidation.FolderPath, outputFormat, GetTrimOutputSuffix(item), ResolveLogicalOutputBaseName(item))
+                : PlanQueueOutputPath(item.InputPath, outputFolderValidation.FolderPath, outputFormat, item);
             if (string.IsNullOrWhiteSpace(plannedOutputPath))
             {
                 const string message = "No safe automatic output path could be planned.";
@@ -1199,7 +1605,8 @@ public sealed class MainForm : Form
                 return false;
             }
 
-            customOutputPath = null;
+            customOutputPath = item.IsSplitRecording ? plannedOutputPath : null;
+            hasCustomOutputPath = item.IsSplitRecording;
         }
 
         var directOutputPath = GetDirectOutputPathForQueueRefresh(item, Path.GetDirectoryName(plannedOutputPath) ?? "", outputFormat);
@@ -1209,12 +1616,14 @@ public sealed class MainForm : Form
         var previousFfmpegRate = item.FfmpegRateValue;
 
         item.OutputFormat = outputFormat;
-        item.ConversionMode = conversionMode;
+        item.ConversionMode = resolvedConversionMode;
+        item.BurnTimestamp = burnTimestamp;
         item.PlannedOutputPath = plannedOutputPath;
         item.CustomOutputPath = customOutputPath;
         item.HasCustomOutputPath = hasCustomOutputPath;
+        item.HasUserCustomOutputPath = item.HasUserCustomOutputPath || outputPathChanged;
         item.HasCustomFormat = item.HasCustomFormat || formatChanged;
-        item.HasCustomMode = item.HasCustomMode || modeChanged;
+        item.HasCustomMode = item.HasCustomMode || modeChanged || burnTimestamp;
         item.HasCustomFpsSetting = item.HasCustomFpsSetting || fpsChanged;
         item.HasExistingDirectOutput = hasExistingDirectOutput;
         if (fpsChanged || item.RequiresManualFpsSelection || !item.HasResolvedFps)
@@ -1312,6 +1721,7 @@ public sealed class MainForm : Form
     private bool TryResetQueueItemToQueueDefaults(QueueItem item, IWin32Window owner)
     {
         item.ClearCustomSettings();
+        item.BurnTimestamp = false;
         var result = QueueItemRefreshService.RefreshEditableItems(
             new[] { item },
             CaptureCurrentQueueSettings(),
@@ -1379,22 +1789,77 @@ public sealed class MainForm : Form
 
     private void RemoveSelectedQueueItemButton_Click(object? sender, EventArgs e)
     {
-        var removableItems = queueItems
-            .Where(item => item != currentQueueItem &&
-                           item.Status is not QueueItemStatus.Running and
-                               not QueueItemStatus.Probing and
-                               not QueueItemStatus.Converting)
-            .ToList();
-
-        foreach (var item in removableItems)
+        if (isQueueProcessing)
         {
-            queueItems.Remove(item);
+            RefreshStatusLog("Remove Selected is unavailable while the queue is running.");
+            return;
+        }
+
+        var removedCount = RemoveSelectedQueueItemsForState(queueItems, GetSelectedQueueItems(), currentQueueItem, isQueueProcessing);
+        if (removedCount == 0)
+        {
+            RefreshStatusLog("Select a queued item to remove.");
+            return;
         }
 
         ResetQueueColumnAutoFitIfQueueIsEmpty();
-        technicalLog.Append($"Cleared {removableItems.Count} queue item(s).");
+        technicalLog.Append($"Removed {removedCount} selected queue item(s).");
         RefreshQueueGrid();
-        RefreshStatusLog(removableItems.Count == 1 ? "Cleared one queue item." : $"Cleared {removableItems.Count} queue items.");
+        RefreshStatusLog(removedCount == 1 ? "Removed selected queue item." : $"Removed {removedCount} selected queue items.");
+        UpdateQueueButtonState();
+    }
+
+    private void DuplicateSelectedQueueItemButton_Click(object? sender, EventArgs e)
+    {
+        if (isQueueProcessing)
+        {
+            RefreshStatusLog("Duplicate Selected is unavailable while the queue is running.");
+            return;
+        }
+
+        var selectedItems = GetSelectedQueueItems();
+        if (selectedItems.Count != 1)
+        {
+            RefreshStatusLog("Select one queued item to duplicate.");
+            return;
+        }
+
+        var source = selectedItems[0];
+        if (!CanCopyQueueItemForState(source, isQueueProcessing))
+        {
+            RefreshStatusLog("Selected queue item cannot be duplicated right now.");
+            return;
+        }
+
+        var addSettings = GetQueueAddSettings();
+        var plannedOutputPath = PlanCopiedQueueItemOutputPath(source, addSettings);
+        if (string.IsNullOrWhiteSpace(plannedOutputPath))
+        {
+            RefreshStatusLog("Could not plan a safe output path for the duplicated item.");
+            return;
+        }
+
+        var freshFpsSettings = QueueItemFpsSettings.AutoDetect();
+        var outputFolderPath = addSettings.OutputDestinationMode == OutputDestinationMode.ChooseOutputFolder
+            ? ResolveQueueItemOutputFolderForCopy(source, addSettings)
+            : null;
+        var copy = QueueItemCopyService.CreateReadyCopy(
+            source,
+            plannedOutputPath,
+            addSettings.OutputDestinationMode,
+            addSettings.OutputDestinationMode == OutputDestinationMode.ChooseOutputFolder ? outputFolderPath : null,
+            addSettings.OutputFormat,
+            queueItemFpsResolver.ResolveQueueItemFps(source.InputPath, freshFpsSettings),
+            freshFpsSettings);
+        copy.LogicalOutputBaseName = source.LogicalOutputBaseName ?? ResolveLogicalOutputBaseName(source);
+
+        queueItems.Add(copy);
+        technicalLog.Append($"{GetQueueCopyActionText(source)} created. Source: {source.InputPath}; Output: {plannedOutputPath}.");
+        RefreshQueueGrid();
+        SelectQueueItem(copy);
+        RefreshDetailsText(DetailsScrollMode.Preserve);
+        RefreshStatusLog(source.Status == QueueItemStatus.Completed ? "Re-added selected item." : "Duplicated selected item.");
+        UpdateQueueButtonState();
     }
 
     private void ClearCompletedQueueButton_Click(object? sender, EventArgs e)
@@ -1740,6 +2205,8 @@ public sealed class MainForm : Form
                 ? QueueItemFpsResolution.PendingAutoDetect()
                 : ResolveQueueItemFps(validation.FilePath, addSettings);
             item.ApplyFpsResolution(addSettings.FpsSettings, fpsResolution);
+            var multiFileExportDetection = new SpotterMultiFileExportDetector().Detect(validation.FilePath);
+            item.MultiFileExportContext = multiFileExportDetection.Context;
             QueueItemStatusService.ApplyPostFpsResolutionStatus(item);
             if (requireItemConfirmation)
             {
@@ -1760,6 +2227,12 @@ public sealed class MainForm : Form
             addedCount++;
             firstAddedPath ??= validation.FilePath;
             technicalLog.Append($"Queued file. Input: {item.InputPath}; Output: {item.PlannedOutputPath}; Status: {item.StatusText}; Format: {item.OutputFormat.DisplayName()}; Mode: {FormatConversionModeForDisplay(item.ConversionMode)}; FPS: {item.FpsDisplayLabel} ({item.FfmpegRateValue}); Destination: {FormatOutputDestinationMode(item.OutputDestinationMode)}.");
+            if (item.MultiFileExportContext is not null)
+            {
+                technicalLog.Append($"{item.MultiFileExportContext.DisplayText} Input: {item.InputPath}");
+            }
+
+            AppendMultiFileExportTechnicalLog(multiFileExportDetection.TechnicalLogText);
             AppendQueueItemFpsTechnicalLog(item, "Queue item FPS detection");
         }
 
@@ -1985,6 +2458,60 @@ public sealed class MainForm : Form
         await PreProbeWaitingQueueItemsIfIdleAsync();
     }
 
+    private async Task AddSplitExportPlansToQueueAsync(IReadOnlyList<SpotterSplitExportPlan> splitPlans, QueueSettingsSnapshot addSettings)
+    {
+        foreach (var plan in splitPlans)
+        {
+            var firstSegment = plan.Segments.FirstOrDefault();
+            if (firstSegment is null || !plan.IsStrongConfidence)
+            {
+                technicalLog.Append($"Split recording import skipped because the plan is not strong enough. Folder: {plan.ExportFolder}; Confidence: {plan.Confidence}");
+                continue;
+            }
+
+            var inputPath = firstSegment.FilePath;
+            var outputFolderPath = ResolveActiveQueueOutputFolder(inputPath, addSettings);
+            var outputFolderValidation = OutputFolderValidator.ValidateOutputFolder(outputFolderPath);
+            if (!outputFolderValidation.IsValid || string.IsNullOrWhiteSpace(outputFolderValidation.FolderPath))
+            {
+                technicalLog.Append($"Split recording import skipped because output destination is invalid. Folder: {plan.ExportFolder}; Output folder: {outputFolderPath}; Reason: {outputFolderValidation.Message}");
+                continue;
+            }
+
+            var plannedOutputPath = PlanSplitRecordingOutputPath(plan, inputPath, outputFolderValidation.FolderPath, addSettings.OutputFormat);
+            if (string.IsNullOrWhiteSpace(plannedOutputPath))
+            {
+                technicalLog.Append($"Split recording import skipped because no safe output path could be planned. Folder: {plan.ExportFolder}");
+                continue;
+            }
+
+            var fpsResolution = ResolveQueueItemFps(inputPath, addSettings);
+            var item = new QueueItem(
+                inputPath,
+                plannedOutputPath,
+                addSettings.OutputDestinationMode,
+                addSettings.OutputDestinationMode == OutputDestinationMode.ChooseOutputFolder ? outputFolderValidation.FolderPath : null,
+                addSettings.OutputFormat,
+                "Fast",
+                addSettings.Fps,
+                hasExistingDirectOutput: false)
+            {
+                SplitExportPlan = plan,
+                LogicalOutputBaseName = GetSplitRecordingOutputBaseName(plan),
+                CustomOutputPath = plannedOutputPath,
+                HasCustomOutputPath = true,
+                HasCustomMode = true
+            };
+            item.ApplyFpsResolution(addSettings.FpsSettings, fpsResolution);
+            QueueItemStatusService.ApplyPostFpsResolutionStatus(item);
+            queueItems.Add(item);
+            technicalLog.Append($"Queued split recording. Folder: {plan.ExportFolder}; Parts: {plan.SegmentCount}; Output: {item.PlannedOutputPath}; FPS: {item.FpsDisplayLabel} ({item.FfmpegRateValue}).");
+        }
+
+        RefreshQueueGrid();
+        await PreProbeWaitingQueueItemsIfIdleAsync();
+    }
+
     private FolderQueueAddPreview CreateFolderQueueAddPreview(IReadOnlyCollection<string> filePaths, QueueSettingsSnapshot addSettings)
     {
         var addablePaths = new List<string>();
@@ -2088,115 +2615,57 @@ public sealed class MainForm : Form
 
     private bool TryPrepareForQueueAdd()
     {
-        if (isQueueProcessing)
+        if (!QueueAddFlowService.ShouldAutoClearBeforeAdd(queueItems, isQueueProcessing))
         {
             return true;
         }
 
-        if (!QueueAddFlowService.HasOnlyFinishedItems(queueItems))
-        {
-            return true;
-        }
-
-        var choice = ShowFinishedQueueAddPrompt();
-        if (choice == FinishedQueueAddChoice.Cancel)
-        {
-            RefreshStatusLog("Add canceled. Queue was not changed.");
-            return false;
-        }
-
-        if (choice == FinishedQueueAddChoice.ClearAndAdd)
-        {
-            var clearedCount = queueItems.Count;
-            queueItems.Clear();
-            ResetQueueColumnAutoFitIfQueueIsEmpty();
-            technicalLog.Append($"Cleared finished queue before adding more files. Items cleared: {clearedCount}.");
-            RefreshQueueGrid();
-            RefreshDetailsText(DetailsScrollMode.Bottom);
-            RefreshStatusLog("Finished queue cleared. Choose files to add.");
-        }
+        var clearedCount = queueItems.Count;
+        queueItems.Clear();
+        ResetQueueColumnAutoFitIfQueueIsEmpty();
+        ResetBatchOptionsForNewQueue();
+        technicalLog.Append($"Cleared completed queue before adding more files. Items cleared: {clearedCount}.");
+        RefreshQueueGrid();
+        RefreshDetailsText(DetailsScrollMode.Bottom);
+        RefreshStatusLog("Completed queue cleared. Choose files to add.");
 
         return true;
     }
 
-    private FinishedQueueAddChoice ShowFinishedQueueAddPrompt()
+    private void ResetBatchOptionsForNewQueue()
     {
-        using var dialog = new Form
+        var defaults = QueueAddFlowService.CreateDefaultBatchOptionsAfterAutoClear();
+        isInitializing = true;
+        try
         {
-            Text = "Add to Queue",
-            StartPosition = FormStartPosition.CenterParent,
-            FormBorderStyle = FormBorderStyle.FixedDialog,
-            MinimizeBox = false,
-            MaximizeBox = false,
-            ShowInTaskbar = false,
-            ClientSize = new Size(500, 180),
-            Font = Font
-        };
+            outputFormatComboBox.SelectedItem = defaults.OutputFormat.DisplayName();
+            conversionModeComboBox.SelectedItem = FormatConversionModeForDisplay(defaults.ConversionMode);
+            frameRateComboBox.SelectedItem = defaults.FpsSettings.RequestedDisplayValue;
+            sameFolderRadioButton.Checked = defaults.OutputDestinationMode == OutputDestinationMode.SameFolderAsSource;
+            chooseFolderRadioButton.Checked = defaults.OutputDestinationMode == OutputDestinationMode.ChooseOutputFolder;
 
-        var root = new TableLayoutPanel
+            selectionState.OutputDestinationMode = defaults.OutputDestinationMode;
+            selectionState.ChosenOutputFolderPath = defaults.ChosenOutputFolder;
+            selectionState.SelectedOutputFolderPath = null;
+            selectionState.PlannedOutputFilePath = null;
+            selectionState.IsProbeValid = false;
+            selectionState.LastProbeResult = null;
+        }
+        finally
         {
-            Dock = DockStyle.Fill,
-            Padding = new Padding(18),
-            ColumnCount = 1,
-            RowCount = 2
-        };
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+            isInitializing = false;
+        }
 
-        var label = new Label
-        {
-            Dock = DockStyle.Fill,
-            Text = "The queue already has finished items.\r\n\r\nStart a new queue before adding more files?",
-            TextAlign = ContentAlignment.MiddleLeft
-        };
-        var buttons = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.RightToLeft,
-            WrapContents = false
-        };
-
-        var cancelButton = CreateButton("Cancel");
-        var keepButton = CreateButton("Keep and Add");
-        var clearButton = CreateButton("Clear and Add");
-        cancelButton.Size = new Size(110, 42);
-        keepButton.Size = new Size(130, 42);
-        clearButton.Size = new Size(130, 42);
-
-        var choice = FinishedQueueAddChoice.Cancel;
-        cancelButton.Click += (_, _) =>
-        {
-            choice = FinishedQueueAddChoice.Cancel;
-            dialog.DialogResult = DialogResult.Cancel;
-            dialog.Close();
-        };
-        keepButton.Click += (_, _) =>
-        {
-            choice = FinishedQueueAddChoice.KeepAndAdd;
-            dialog.DialogResult = DialogResult.OK;
-            dialog.Close();
-        };
-        clearButton.Click += (_, _) =>
-        {
-            choice = FinishedQueueAddChoice.ClearAndAdd;
-            dialog.DialogResult = DialogResult.OK;
-            dialog.Close();
-        };
-
-        buttons.Controls.Add(cancelButton);
-        buttons.Controls.Add(keepButton);
-        buttons.Controls.Add(clearButton);
-        root.Controls.Add(label, 0, 0);
-        root.Controls.Add(buttons, 0, 1);
-        dialog.Controls.Add(root);
-        dialog.CancelButton = cancelButton;
-        dialog.ShowDialog(this);
-        return choice;
+        ApplyOutputDestinationMode();
+        RecalculatePlannedOutputPath();
+        SaveCurrentSettings();
+        UpdateConvertButtonState();
+        technicalLog.Append("Batch Options reset to defaults after completed queue auto-clear.");
     }
 
     private string? GetDirectOutputPathForQueueRefresh(QueueItem item, string outputFolderPath, OutputFormat outputFormat)
     {
-        if (!string.IsNullOrWhiteSpace(item.CustomOutputPath))
+        if (item.HasUserCustomOutputPath && !string.IsNullOrWhiteSpace(item.CustomOutputPath))
         {
             var customValidation = OutputPathService.ValidateCustomOutputPath(
                 item.InputPath,
@@ -2207,12 +2676,12 @@ public sealed class MainForm : Form
             return customValidation.IsValid ? customValidation.OutputPath : null;
         }
 
-        return OutputPathService.GetDirectOutputPath(item.InputPath, outputFolderPath, outputFormat);
+        return OutputPathService.GetDirectOutputPath(item.InputPath, outputFolderPath, outputFormat, GetTrimOutputSuffix(item));
     }
 
     private string? PlanQueueOutputPath(string inputPath, string outputFolderPath, OutputFormat outputFormat, QueueItem? excludedItem = null)
     {
-        if (!string.IsNullOrWhiteSpace(excludedItem?.CustomOutputPath))
+        if (excludedItem?.HasUserCustomOutputPath == true && !string.IsNullOrWhiteSpace(excludedItem.CustomOutputPath))
         {
             var customValidation = OutputPathService.ValidateCustomOutputPath(
                 inputPath,
@@ -2248,7 +2717,167 @@ public sealed class MainForm : Form
             inputPath,
             outputFolderPath,
             outputFormat,
-            candidate => IsAllowedQueueOutputPath(candidate, excludedItem));
+            candidate => IsAllowedQueueOutputPath(candidate, excludedItem),
+            allowExistingDirectOutput: true,
+            baseNameSuffix: GetTrimOutputSuffix(excludedItem));
+    }
+
+    private string? PlanCopiedQueueItemOutputPath(QueueItem source, QueueSettingsSnapshot addSettings)
+    {
+        var logicalBaseName = source.LogicalOutputBaseName ?? ResolveLogicalOutputBaseName(source);
+        var outputFolder = ResolveQueueItemOutputFolderForCopy(source, addSettings);
+        if (string.IsNullOrWhiteSpace(outputFolder))
+        {
+            return null;
+        }
+
+        if (source.IsSplitRecording && source.SplitExportPlan is not null)
+        {
+            return PlanSplitRecordingOutputPath(
+                source.SplitExportPlan,
+                source.InputPath,
+                outputFolder,
+                addSettings.OutputFormat,
+                trimSuffix: null,
+                baseNameOverride: logicalBaseName);
+        }
+
+        return PlanAutomaticQueueOutputPath(source.InputPath, outputFolder, addSettings.OutputFormat, trimSuffix: null);
+    }
+
+    private string? PlanAutomaticQueueOutputPath(string inputPath, string outputFolderPath, OutputFormat outputFormat, string? trimSuffix)
+    {
+        return OutputPathService.PlanUniqueOutputPath(
+            inputPath,
+            outputFolderPath,
+            outputFormat,
+            candidate => IsAllowedQueueOutputPath(candidate),
+            allowExistingDirectOutput: false,
+            baseNameSuffix: trimSuffix);
+    }
+
+    private string? ResolveQueueItemOutputFolderForCopy(QueueItem source, QueueSettingsSnapshot addSettings)
+    {
+        if (addSettings.OutputDestinationMode == OutputDestinationMode.ChooseOutputFolder &&
+            !string.IsNullOrWhiteSpace(addSettings.ChosenOutputFolder))
+        {
+            return Directory.Exists(addSettings.ChosenOutputFolder)
+                ? addSettings.ChosenOutputFolder
+                : null;
+        }
+
+        return Path.GetDirectoryName(source.InputPath);
+    }
+
+    private string? PlanSplitRecordingOutputPath(SpotterSplitExportPlan plan, string inputPath, string outputFolderPath, OutputFormat outputFormat)
+    {
+        return PlanSplitRecordingOutputPath(plan, inputPath, outputFolderPath, outputFormat, trimSuffix: null);
+    }
+
+    private string? PlanSplitRecordingOutputPath(SpotterSplitExportPlan plan, string inputPath, string outputFolderPath, OutputFormat outputFormat, string? trimSuffix)
+    {
+        return PlanSplitRecordingOutputPath(plan, inputPath, outputFolderPath, outputFormat, trimSuffix, baseNameOverride: null);
+    }
+
+    private string? PlanSplitRecordingOutputPath(SpotterSplitExportPlan plan, string inputPath, string outputFolderPath, OutputFormat outputFormat, string? trimSuffix, string? baseNameOverride)
+    {
+        var baseName = string.IsNullOrWhiteSpace(baseNameOverride)
+            ? GetSplitRecordingOutputBaseName(plan)
+            : SanitizeFileNamePart(baseNameOverride);
+        if (string.IsNullOrWhiteSpace(baseName))
+        {
+            return null;
+        }
+
+        for (var index = 0; index <= 999; index++)
+        {
+            var suffix = index == 0 ? "" : $"_{index:00}";
+            var candidate = Path.Combine(outputFolderPath, $"{baseName}{SanitizeFileNamePart(trimSuffix)}{suffix}{outputFormat.Extension()}");
+            if (OutputPathService.IsSafeOutputPath(inputPath, candidate) &&
+                !File.Exists(candidate) &&
+                IsAllowedQueueOutputPath(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static string GetSplitRecordingOutputBaseName(SpotterSplitExportPlan plan)
+    {
+        if (!string.IsNullOrWhiteSpace(plan.LogicalOutputBaseName) &&
+            plan.LogicalOutputBaseName.IndexOfAny(Path.GetInvalidFileNameChars()) < 0)
+        {
+            return plan.LogicalOutputBaseName;
+        }
+
+        var folderName = Path.GetFileName(plan.ExportFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (!string.IsNullOrWhiteSpace(folderName) && folderName.IndexOfAny(Path.GetInvalidFileNameChars()) < 0)
+        {
+            return folderName;
+        }
+
+        var firstSegmentBaseName = Path.GetFileNameWithoutExtension(plan.Segments.FirstOrDefault()?.FileName);
+        return string.IsNullOrWhiteSpace(firstSegmentBaseName) ? "" : firstSegmentBaseName + "_full";
+    }
+
+    public static string? ResolveLogicalOutputBaseName(QueueItem item)
+    {
+        if (!item.IsSplitRecording)
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(item.LogicalOutputBaseName))
+        {
+            return item.LogicalOutputBaseName;
+        }
+
+        var fileName = Path.GetFileNameWithoutExtension(item.PlannedOutputPath);
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return item.SplitExportPlan is null ? null : GetSplitRecordingOutputBaseName(item.SplitExportPlan);
+        }
+
+        var trimSuffix = GetTrimOutputSuffix(item);
+        if (!string.IsNullOrWhiteSpace(trimSuffix))
+        {
+            var trimIndex = fileName.IndexOf(trimSuffix, StringComparison.OrdinalIgnoreCase);
+            if (trimIndex > 0)
+            {
+                fileName = fileName[..trimIndex];
+            }
+        }
+        else if (fileName.Length > 3 &&
+                 fileName[^3] == '_' &&
+                 char.IsDigit(fileName[^2]) &&
+                 char.IsDigit(fileName[^1]))
+        {
+            fileName = fileName[..^3];
+        }
+
+        return string.IsNullOrWhiteSpace(fileName)
+            ? item.SplitExportPlan is null ? null : GetSplitRecordingOutputBaseName(item.SplitExportPlan)
+            : fileName;
+    }
+
+    private static string? GetTrimOutputSuffix(QueueItem? item)
+    {
+        return item?.TrimRange is null
+            ? null
+            : TrimOutputNameFormatter.BuildTrimSuffix(RecordingTimelineBuilder.Build(item), item.TrimRange);
+    }
+
+    private static string SanitizeFileNamePart(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "";
+        }
+
+        var invalid = Path.GetInvalidFileNameChars();
+        return new string(value.Select(character => invalid.Contains(character) ? '_' : character).ToArray());
     }
 
     private bool IsAvailableQueueOutputPath(string outputPath, QueueItem? excludedItem = null)
@@ -2333,6 +2962,11 @@ public sealed class MainForm : Form
 
     private static bool CanApplyLockedQueueSettings(QueueItem item)
     {
+        if (item.IsSplitRecording)
+        {
+            return false;
+        }
+
         return item.Status is QueueItemStatus.Ready or QueueItemStatus.Warning or QueueItemStatus.Skipped;
     }
 
@@ -2409,12 +3043,13 @@ public sealed class MainForm : Form
     {
         row.Tag = item;
         SetQueueCellValue(row, "Status", item.StatusText);
-        SetQueueCellValue(row, "File", Path.GetFileName(item.InputPath));
+        SetQueueCellValue(row, "File", item.IsSplitRecording ? $"{Path.GetFileName(item.InputPath)} (split recording)" : Path.GetFileName(item.InputPath));
         SetQueueCellValue(row, "Output", item.PlannedOutputPath);
         SetQueueCellValue(row, "Format", item.OutputFormat.DisplayName());
         SetQueueCellValue(row, "Mode", FormatConversionModeForDisplay(item.ConversionMode));
         SetQueueCellValue(row, "Fps", FormatQueueFpsForRow(item));
-        SetQueueCellValue(row, "Progress", item.ProgressText);
+        SetQueueCellValue(row, "Resolution", QueueGridRowFormatter.FormatResolution(item));
+        SetQueueCellValue(row, "Progress", QueueGridRowFormatter.FormatProgress(item));
         ApplyQueueGridRowStyle(row, item);
     }
 
@@ -2535,6 +3170,7 @@ public sealed class MainForm : Form
             QueueFormatColumnWidth +
             QueueModeColumnWidth +
             QueueFpsColumnWidth +
+            QueueResolutionColumnWidth +
             QueueProgressColumnWidth;
         var flexibleWidth = Math.Max(minimumFileWidth + minimumOutputWidth, availableWidth - fixedWidth);
         var extraFlexibleWidth = Math.Max(0, flexibleWidth - QueueFileColumnWidth - QueueOutputColumnWidth);
@@ -2550,6 +3186,7 @@ public sealed class MainForm : Form
             SetQueueColumnWidth("Format", QueueFormatColumnWidth);
             SetQueueColumnWidth("Mode", QueueModeColumnWidth);
             SetQueueColumnWidth("Fps", QueueFpsColumnWidth);
+            SetQueueColumnWidth("Resolution", QueueResolutionColumnWidth);
             SetQueueColumnWidth("Progress", QueueProgressColumnWidth);
         }
         finally
@@ -2582,10 +3219,14 @@ public sealed class MainForm : Form
         stopAfterCurrentButton.Text = stopAfterCurrentRequested ? "Stop Requested" : "Stop After Current";
         cancelQueueButton.Enabled = isQueueProcessing;
         openOutputFolderButton.Enabled = OpenOutputTargetResolver.Resolve(queueItems, GetSelectedQueueItem(), lastSuccessfulOutputPath).Kind != OpenOutputTargetKind.Unavailable;
-        var allowQueueEditing = queueGridView.Enabled;
-        removeSelectedQueueItemButton.Enabled = allowQueueEditing && queueItems.Any(item =>
-            item != currentQueueItem &&
-            item.Status is not QueueItemStatus.Running and not QueueItemStatus.Probing and not QueueItemStatus.Converting);
+        var allowQueueEditing = queueGridView.Enabled && !isQueueProcessing;
+        var selectedItems = GetSelectedQueueItems();
+        var selectedCopyItem = selectedItems.Count == 1 ? selectedItems[0] : null;
+        removeSelectedQueueItemButton.Enabled = allowQueueEditing && selectedItems.Any(CanRemoveQueueItem);
+        duplicateSelectedQueueItemButton.Text = GetQueueCopyActionText(selectedCopyItem);
+        duplicateSelectedQueueItemButton.Enabled = allowQueueEditing &&
+                                                   selectedCopyItem is not null &&
+                                                   CanCopyQueueItemForState(selectedCopyItem, isQueueProcessing);
         clearCompletedQueueButton.Enabled = allowQueueEditing && queueItems.Any(item => item.Status == QueueItemStatus.Completed);
     }
 
@@ -2857,17 +3498,42 @@ public sealed class MainForm : Form
             item.PlannedOutputPath = outputSafety.OutputPath!;
         }
 
-        var duration = ParseProbeDuration(probeResult.Duration);
+        var duration = item.IsSplitRecording ? null : ParseProbeDuration(probeResult.Duration);
         var hasDuration = duration.HasValue && duration.Value > TimeSpan.Zero;
-        ConfigureProgressBarForConversion(hasDuration);
+        var effectiveDuration = item.TrimRange is null ? duration : item.TrimRange.End - item.TrimRange.Start;
+        var hasEffectiveDuration = effectiveDuration.HasValue && effectiveDuration.Value > TimeSpan.Zero;
+        ConfigureProgressBarForConversion(hasEffectiveDuration);
         conversionProgressBar.Value = 0;
-        SetQueueItemStatus(item, QueueItemStatus.Converting, "Converting", hasDuration ? "0%" : "Processing");
-        RefreshStatusLog($"Processing {ordinal} of {totalItems}: {fileName}");
+        SetQueueItemStatus(item, QueueItemStatus.Converting, "Converting", hasEffectiveDuration ? "0%" : "Processing");
+        RefreshStatusLog(item.TrimRange is null ? $"Processing {ordinal} of {totalItems}: {fileName}" : $"Converting selected trim... Processing {ordinal} of {totalItems}: {fileName}");
 
         var progress = new Progress<ConversionProgress>(progressUpdate => UpdateQueueConversionProgress(item, progressUpdate));
-        var conversionResult = string.Equals(item.ConversionMode, "Encode", StringComparison.OrdinalIgnoreCase)
-            ? await conversionService.EncodeAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, progress, cancellationToken)
-            : await conversionService.RemuxAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, progress, cancellationToken);
+        var metadata = QueueItemContainerMetadataBuilder.Build(item);
+        var timeline = RecordingTimelineBuilder.Build(item);
+        var burnTimestamp = BurnTimestampMetadataBuilder.Build(item, timeline);
+        ConversionResult conversionResult;
+        if (item.BurnTimestamp && !BurnTimestampMetadataBuilder.IsSupportedMode(item.ConversionMode))
+        {
+            conversionResult = BuildBurnTimestampUnsupportedResult(item, BurnTimestampMetadataBuilder.RequiresFullModeMessage, effectiveDuration);
+        }
+        else if (item.BurnTimestamp && burnTimestamp is null)
+        {
+            conversionResult = BuildBurnTimestampUnsupportedResult(item, BurnTimestampMetadataBuilder.RequiresRecordingDateTimeMessage, effectiveDuration);
+        }
+        else
+        {
+            conversionResult = item.IsSplitRecording
+                ? await ConvertSplitRecordingQueueItemAsync(item, duration, cancellationToken, metadata, burnTimestamp, progress)
+                : item.TrimRange is not null
+                    ? string.Equals(item.ConversionMode, "Encode", StringComparison.OrdinalIgnoreCase)
+                        ? await conversionService.EncodeTrimmedAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, item.TrimRange, progress, cancellationToken, metadata, burnTimestamp)
+                        : TrimConversionPolicy.ShouldBlockTrimmedConversion(item.TrimRange, item.ConversionMode)
+                            ? BuildTrimModeUnsupportedResult(item, duration)
+                            : await conversionService.RemuxTrimmedAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, item.TrimRange, progress, cancellationToken, metadata)
+                    : string.Equals(item.ConversionMode, "Encode", StringComparison.OrdinalIgnoreCase)
+                        ? await conversionService.EncodeAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, progress, cancellationToken, metadata, burnTimestamp)
+                        : await conversionService.RemuxAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, progress, cancellationToken, metadata);
+        }
 
         item.ConversionResult = conversionResult;
         AppendConversionResultToLog(conversionResult, includeStatusSummary: false);
@@ -2936,6 +3602,175 @@ public sealed class MainForm : Form
         return null;
     }
 
+    private async Task<ConversionResult> ConvertSplitRecordingQueueItemAsync(QueueItem item, TimeSpan? duration, CancellationToken cancellationToken, ContainerMetadata? metadata, BurnTimestampOptions? burnTimestamp, IProgress<ConversionProgress>? progress)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        if (TrimConversionPolicy.ShouldBlockTrimmedConversion(item.TrimRange, item.ConversionMode))
+        {
+            stopwatch.Stop();
+            return item.TrimRange is not null
+                ? BuildTrimModeUnsupportedResult(item, duration, stopwatch.Elapsed)
+                : new ConversionResult(
+                    false,
+                    "Combined split recordings currently use Fast mode.",
+                    ffmpegTools.FfmpegPath,
+                    Array.Empty<string>(),
+                    item.InputPath,
+                    item.PlannedOutputPath,
+                    item.Fps,
+                    null,
+                    "",
+                    "Combined split recording Full mode is not supported in this pass. Choose Fast mode or import every DAT separately.",
+                    ConversionMode: item.ConversionMode,
+                    OutputFormat: item.OutputFormat.DisplayName(),
+                    Duration: duration,
+                    UsedDeterminateProgress: false,
+                    ProcessingTime: stopwatch.Elapsed);
+        }
+
+        if (item.SplitExportPlan is null || !item.SplitExportPlan.IsStrongConfidence)
+        {
+            stopwatch.Stop();
+            return new ConversionResult(
+                false,
+                "Split recording could not be verified.",
+                ffmpegTools.FfmpegPath,
+                Array.Empty<string>(),
+                item.InputPath,
+                item.PlannedOutputPath,
+                item.Fps,
+                null,
+                "",
+                "Split recording plan was not strong enough at conversion time.",
+                ConversionMode: "Fast",
+                OutputFormat: item.OutputFormat.DisplayName(),
+                Duration: duration,
+                UsedDeterminateProgress: false,
+                ProcessingTime: stopwatch.Elapsed);
+        }
+
+        if (item.TrimRange is not null)
+        {
+            var timeline = RecordingTimelineBuilder.Build(item);
+            var trimmedResult = string.Equals(item.ConversionMode, "Encode", StringComparison.OrdinalIgnoreCase)
+                ? await conversionService.EncodeTrimmedSplitAsync(
+                    item.InputPath,
+                    item.PlannedOutputPath,
+                    item.OutputFormat,
+                    item.Fps,
+                    item.SplitExportPlan,
+                    timeline,
+                    item.TrimRange,
+                    cancellationToken,
+                    metadata,
+                    burnTimestamp,
+                    progress)
+                : await conversionService.RemuxTrimmedSplitAsync(
+                    item.InputPath,
+                    item.PlannedOutputPath,
+                    item.OutputFormat,
+                    item.Fps,
+                    item.SplitExportPlan,
+                    timeline,
+                    item.TrimRange,
+                    cancellationToken,
+                    metadata);
+            stopwatch.Stop();
+            return trimmedResult with { ProcessingTime = stopwatch.Elapsed };
+        }
+
+        if (item.BurnTimestamp && string.Equals(item.ConversionMode, "Encode", StringComparison.OrdinalIgnoreCase))
+        {
+            var timeline = RecordingTimelineBuilder.Build(item);
+            if (!timeline.TotalDuration.HasValue || timeline.TotalDuration.Value <= TimeSpan.Zero)
+            {
+                stopwatch.Stop();
+                return BuildBurnTimestampUnsupportedResult(item, "Split recording duration is required for Burn timestamp.", duration);
+            }
+
+            var fullRange = new TrimRange(TimeSpan.Zero, timeline.TotalDuration.Value);
+            var encodedResult = await conversionService.EncodeTrimmedSplitAsync(
+                item.InputPath,
+                item.PlannedOutputPath,
+                item.OutputFormat,
+                item.Fps,
+                item.SplitExportPlan,
+                timeline,
+                fullRange,
+                cancellationToken,
+                metadata,
+                burnTimestamp,
+                progress);
+            stopwatch.Stop();
+            return encodedResult with { ProcessingTime = stopwatch.Elapsed };
+        }
+
+        var result = await new SpotterCombinedSplitExportPrototype(_ => item.SplitExportPlan, (inputPath, outputPath, token) => new SpotterDatPayloadExtractor().Extract(inputPath, outputPath, token), (executablePath, arguments, timeout, token) => FfmpegProcessRunner.RunAsync(executablePath, arguments, timeout, token))
+            .RunAsync(item.InputPath, item.PlannedOutputPath, ffmpegTools.FfmpegPath, item.Fps, keepTemp: false, cancellationToken, metadata);
+
+        stopwatch.Stop();
+
+        return new ConversionResult(
+            result.Succeeded,
+            result.Succeeded ? "Fast conversion completed." : ConversionResult.FastFailedMessage,
+            ffmpegTools.FfmpegPath,
+            result.FfmpegArguments,
+            item.InputPath,
+            item.PlannedOutputPath,
+            item.Fps,
+            result.FfmpegResult?.ExitCode,
+            result.FfmpegResult?.StandardOutput ?? "",
+            result.BuildTechnicalReport(),
+            ConversionMode: "Fast",
+            OutputFormat: item.OutputFormat.DisplayName(),
+            WasCanceled: result.FfmpegResult?.WasCanceled == true || string.Equals(result.FailureReason, "Combined split-export remux was canceled.", StringComparison.Ordinal),
+            TimedOut: result.FfmpegResult?.TimedOut == true,
+            Duration: duration,
+            UsedDeterminateProgress: false,
+            InputPathMode: ConversionInputPathMode.CleanExtractedH264,
+            ProcessingTime: stopwatch.Elapsed);
+    }
+
+    private ConversionResult BuildTrimModeUnsupportedResult(QueueItem item, TimeSpan? duration, TimeSpan? processingTime = null)
+    {
+        return new ConversionResult(
+            false,
+            TrimConversionPolicy.FastModeOnlyMessage,
+            ffmpegTools.FfmpegPath,
+            Array.Empty<string>(),
+            item.InputPath,
+            item.PlannedOutputPath,
+            item.Fps,
+            null,
+            "",
+            "TrimRange was set with an unsupported conversion mode.",
+            ConversionMode: item.ConversionMode,
+            OutputFormat: item.OutputFormat.DisplayName(),
+            Duration: item.TrimRange is null ? duration : item.TrimRange.End - item.TrimRange.Start,
+            UsedDeterminateProgress: item.TrimRange is not null || duration.HasValue,
+            ProcessingTime: processingTime);
+    }
+
+    private ConversionResult BuildBurnTimestampUnsupportedResult(QueueItem item, string message, TimeSpan? duration)
+    {
+        return new ConversionResult(
+            false,
+            message,
+            ffmpegTools.FfmpegPath,
+            Array.Empty<string>(),
+            item.InputPath,
+            item.PlannedOutputPath,
+            item.Fps,
+            null,
+            "",
+            message,
+            ConversionMode: item.ConversionMode,
+            OutputFormat: item.OutputFormat.DisplayName(),
+            Duration: duration,
+            UsedDeterminateProgress: duration.HasValue);
+    }
+
     private bool IsProcessableQueueItem(QueueItem item)
     {
         return QueueProcessingEligibilityService.IsProcessable(item, CustomOutputPathExists);
@@ -3002,10 +3837,22 @@ public sealed class MainForm : Form
         var outputFolderValidation = OutputFolderValidator.ValidateOutputFolder(outputFolderPath);
         if (!outputFolderValidation.IsValid || string.IsNullOrWhiteSpace(outputFolderValidation.FolderPath))
         {
+            var plannedOutputValidation = ValidatePlannedQueueOutputPath(item);
+            if (plannedOutputValidation is not null)
+            {
+                return plannedOutputValidation;
+            }
+
             return QueueOutputSafetyResult.Fail($"Output folder is invalid: {outputFolderValidation.Message}");
         }
 
-        var directOutputPath = OutputPathService.GetDirectOutputPath(item.InputPath, outputFolderValidation.FolderPath, item.OutputFormat);
+        var plannedOutputResult = ValidatePlannedQueueOutputPath(item);
+        if (plannedOutputResult is not null)
+        {
+            return plannedOutputResult;
+        }
+
+        var directOutputPath = GetDirectOutputPathForQueueRefresh(item, outputFolderValidation.FolderPath, item.OutputFormat);
         var directOutputExists = !string.IsNullOrWhiteSpace(directOutputPath) && File.Exists(directOutputPath);
         var plannedOutputIsDirectOutput = !string.IsNullOrWhiteSpace(directOutputPath) &&
                                           string.Equals(item.PlannedOutputPath, directOutputPath, StringComparison.OrdinalIgnoreCase);
@@ -3030,17 +3877,76 @@ public sealed class MainForm : Form
             : "Output safety check passed.");
     }
 
+    private QueueOutputSafetyResult? ValidatePlannedQueueOutputPath(QueueItem item)
+    {
+        if (string.IsNullOrWhiteSpace(item.PlannedOutputPath))
+        {
+            return null;
+        }
+
+        string plannedOutputPath;
+        try
+        {
+            plannedOutputPath = Path.GetFullPath(item.PlannedOutputPath);
+        }
+        catch (Exception ex) when (ex is ArgumentException or PathTooLongException or NotSupportedException)
+        {
+            return null;
+        }
+
+        if (!string.Equals(Path.GetExtension(plannedOutputPath), item.OutputFormat.Extension(), StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var plannedOutputFolder = Path.GetDirectoryName(plannedOutputPath);
+        if (string.IsNullOrWhiteSpace(plannedOutputFolder) || !Directory.Exists(plannedOutputFolder))
+        {
+            return null;
+        }
+
+        if (!OutputPathService.IsSafeOutputPath(item.InputPath, plannedOutputPath))
+        {
+            return QueueOutputSafetyResult.Fail($"Planned output path is not safe: {plannedOutputPath}");
+        }
+
+        if (!IsAllowedQueueOutputPath(plannedOutputPath, item))
+        {
+            return QueueOutputSafetyResult.Fail($"Planned output path is already used by another queued item: {plannedOutputPath}");
+        }
+
+        if (File.Exists(plannedOutputPath))
+        {
+            return QueueOutputSafetyResult.Skip("Exists", "Selected output exists", $"Planned output already exists: {plannedOutputPath}");
+        }
+
+        item.PlannedOutputPath = plannedOutputPath;
+        return QueueOutputSafetyResult.Convert(plannedOutputPath, "Planned output path safety check passed.");
+    }
+
     private void UpdateQueueConversionProgress(QueueItem item, ConversionProgress progress)
     {
         lastConversionProgress = progress;
 
-        if (progress.Percent.HasValue && conversionProgressBar.Style != ProgressBarStyle.Marquee)
+        if (progress.Percent.HasValue)
         {
+            if (conversionProgressBar.Style == ProgressBarStyle.Marquee)
+            {
+                conversionProgressBar.Style = ProgressBarStyle.Continuous;
+                conversionProgressBar.MarqueeAnimationSpeed = 0;
+            }
+
             conversionProgressBar.Value = Math.Clamp(progress.Percent.Value, conversionProgressBar.Minimum, conversionProgressBar.Maximum);
             item.ProgressText = $"{progress.Percent.Value}%";
         }
         else
         {
+            if (string.Equals(progress.Summary, "Preparing selected trim...", StringComparison.Ordinal))
+            {
+                conversionProgressBar.Style = ProgressBarStyle.Marquee;
+                conversionProgressBar.MarqueeAnimationSpeed = 30;
+            }
+
             item.ProgressText = string.IsNullOrWhiteSpace(progress.Summary) ? "Processing" : progress.Summary;
         }
 
@@ -3207,9 +4113,13 @@ public sealed class MainForm : Form
         {
             currentConversionHeadline = "Converting...";
             RefreshStatusLog(currentConversionHeadline);
+            var metadata = new ContainerMetadata(
+                CreationTime: null,
+                Title: Path.GetFileNameWithoutExtension(inputPath),
+                Comment: "Source type: Single DAT");
             result = string.Equals(conversionMode, "Encode", StringComparison.OrdinalIgnoreCase)
-                ? await conversionService.EncodeAsync(inputPath, outputPath, outputFormat, fps, duration, progress, conversionCancellationTokenSource.Token)
-                : await conversionService.RemuxAsync(inputPath, outputPath, outputFormat, fps, duration, progress, conversionCancellationTokenSource.Token);
+                ? await conversionService.EncodeAsync(inputPath, outputPath, outputFormat, fps, duration, progress, conversionCancellationTokenSource.Token, metadata)
+                : await conversionService.RemuxAsync(inputPath, outputPath, outputFormat, fps, duration, progress, conversionCancellationTokenSource.Token, metadata);
         }
         finally
         {
@@ -3265,6 +4175,7 @@ public sealed class MainForm : Form
         stopAfterCurrentButton.Enabled = false;
         cancelQueueButton.Enabled = false;
         removeSelectedQueueItemButton.Enabled = false;
+        duplicateSelectedQueueItemButton.Enabled = false;
         clearCompletedQueueButton.Enabled = false;
         sameFolderRadioButton.Enabled = enabled;
         chooseFolderRadioButton.Enabled = enabled;
@@ -3336,9 +4247,20 @@ public sealed class MainForm : Form
     {
         lastConversionProgress = progress;
 
-        if (progress.Percent.HasValue && conversionProgressBar.Style != ProgressBarStyle.Marquee)
+        if (progress.Percent.HasValue)
         {
+            if (conversionProgressBar.Style == ProgressBarStyle.Marquee)
+            {
+                conversionProgressBar.Style = ProgressBarStyle.Continuous;
+                conversionProgressBar.MarqueeAnimationSpeed = 0;
+            }
+
             conversionProgressBar.Value = Math.Clamp(progress.Percent.Value, conversionProgressBar.Minimum, conversionProgressBar.Maximum);
+        }
+        else if (string.Equals(progress.Summary, "Preparing selected trim...", StringComparison.Ordinal))
+        {
+            conversionProgressBar.Style = ProgressBarStyle.Marquee;
+            conversionProgressBar.MarqueeAnimationSpeed = 30;
         }
 
         var now = DateTime.UtcNow;
@@ -3423,37 +4345,97 @@ public sealed class MainForm : Form
     private void SetDetailsVisible(bool visible)
     {
         var wasVisible = areDetailsVisible;
+        if (visible == wasVisible)
+        {
+            return;
+        }
+
+        SetRootRedraw(enabled: false);
         SuspendLayout();
         rootLayout?.SuspendLayout();
         detailsPanel?.SuspendLayout();
-
-        areDetailsVisible = visible;
-        showDetailsButton.Text = visible ? "Hide Details" : "Show Details";
-
-        if (detailsPanel is not null)
+        try
         {
-            detailsPanel.Visible = visible;
+            if (visible)
+            {
+                var detailsHeight = GetDetailsExpansionHeight();
+                if (detailsRowStyle is not null)
+                {
+                    detailsRowStyle.SizeType = SizeType.Absolute;
+                    detailsRowStyle.Height = detailsHeight;
+                }
+
+                if (detailsPanel is not null)
+                {
+                    detailsPanel.Visible = true;
+                }
+
+                ClientSize = new Size(ClientSize.Width, ClientSize.Height + detailsHeight);
+                EnsureWindowVisible();
+                areDetailsVisible = true;
+                showDetailsButton.Text = "Hide Details";
+                SetDetailsText(BuildDetailsText(), DetailsScrollMode.Bottom);
+            }
+            else
+            {
+                var detailsHeight = GetCurrentDetailsRowHeight();
+                areDetailsVisible = false;
+                showDetailsButton.Text = "Show Details";
+
+                if (detailsPanel is not null)
+                {
+                    detailsPanel.Visible = false;
+                }
+
+                if (detailsRowStyle is not null)
+                {
+                    detailsRowStyle.SizeType = SizeType.Absolute;
+                    detailsRowStyle.Height = 0;
+                }
+
+                ClientSize = new Size(ClientSize.Width, Math.Max(MinimumWindowHeight, ClientSize.Height - detailsHeight));
+            }
+        }
+        finally
+        {
+            detailsPanel?.ResumeLayout(false);
+            rootLayout?.ResumeLayout(true);
+            ResumeLayout(true);
+            SetRootRedraw(enabled: true);
+            Invalidate();
+        }
+    }
+
+    private void MainForm_Resize(object? sender, EventArgs e)
+    {
+        if (!areDetailsVisible || detailsRowStyle is null)
+        {
+            return;
         }
 
-        if (detailsRowStyle is not null)
-        {
-            detailsRowStyle.SizeType = SizeType.Absolute;
-            detailsRowStyle.Height = visible ? DetailsExpandedHeight : 0;
-        }
+        detailsRowStyle.Height = Math.Min(detailsRowStyle.Height, GetDetailsExpansionHeight());
+    }
 
-        if (visible)
-        {
-            SetDetailsText(BuildDetailsText(), DetailsScrollMode.Bottom);
-        }
+    private int GetCurrentDetailsRowHeight()
+    {
+        return detailsRowStyle is null ? 0 : Math.Max(0, (int)Math.Round(detailsRowStyle.Height));
+    }
 
-        if (visible != wasVisible)
-        {
-            ClientSize = new Size(ClientSize.Width, ClientSize.Height + (visible ? DetailsExpandedHeight : -DetailsExpandedHeight));
-        }
+    private int GetDetailsExpansionHeight()
+    {
+        var workingArea = Screen.FromControl(this).WorkingArea;
+        var frameHeight = Math.Max(0, Height - ClientSize.Height);
+        var maxClientHeight = Math.Max(MinimumWindowHeight, workingArea.Height - (WindowScreenMargin * 2) - frameHeight);
+        var availableHeight = Math.Max(DetailsFooterHeight, maxClientHeight - ClientSize.Height);
+        return Math.Min(DetailsExpandedHeight, availableHeight);
+    }
 
-        detailsPanel?.ResumeLayout(true);
-        rootLayout?.ResumeLayout(true);
-        ResumeLayout(true);
+    private void EnsureWindowVisible()
+    {
+        var workingArea = Screen.FromControl(this).WorkingArea;
+        var x = Math.Clamp(Left, workingArea.Left + WindowScreenMargin, Math.Max(workingArea.Left + WindowScreenMargin, workingArea.Right - Width - WindowScreenMargin));
+        var y = Math.Clamp(Top, workingArea.Top + WindowScreenMargin, Math.Max(workingArea.Top + WindowScreenMargin, workingArea.Bottom - Height - WindowScreenMargin));
+        Location = new Point(x, y);
     }
 
     private string BuildDetailsText()
@@ -3472,6 +4454,32 @@ public sealed class MainForm : Form
                queueItems.Contains(item)
             ? item
             : null;
+    }
+
+    private IReadOnlyList<QueueItem> GetSelectedQueueItems()
+    {
+        var selected = new List<QueueItem>();
+        foreach (DataGridViewRow row in queueGridView.SelectedRows)
+        {
+            if (row.Tag is QueueItem item && queueItems.Contains(item) && !selected.Contains(item))
+            {
+                selected.Add(item);
+            }
+        }
+
+        if (selected.Count == 0 &&
+            queueGridView.CurrentRow?.Tag is QueueItem currentItem &&
+            queueItems.Contains(currentItem))
+        {
+            selected.Add(currentItem);
+        }
+
+        return selected;
+    }
+
+    private bool CanRemoveQueueItem(QueueItem item)
+    {
+        return CanRemoveQueueItemForState(item, currentQueueItem, isQueueProcessing);
     }
 
     private void SelectQueueItem(QueueItem item)
@@ -3630,6 +4638,14 @@ public sealed class MainForm : Form
         SendMessage(statusLogTextBox.Handle, WmSetRedraw, enabled ? new IntPtr(1) : IntPtr.Zero, IntPtr.Zero);
     }
 
+    private void SetRootRedraw(bool enabled)
+    {
+        if (IsHandleCreated)
+        {
+            SendMessage(Handle, WmSetRedraw, enabled ? new IntPtr(1) : IntPtr.Zero, IntPtr.Zero);
+        }
+    }
+
     private void UpdateConvertButtonState()
     {
         convertButton.Enabled =
@@ -3751,8 +4767,10 @@ public sealed class MainForm : Form
         appSettings.OutputFormat = GetSelectedOutputFormat().DisplayName();
         appSettings.ConversionMode = GetSelectedConversionMode();
         appSettings.Fps = GetSelectedFrameRate();
-        appSettings.WindowWidth = DefaultClientWidth;
-        appSettings.WindowHeight = DefaultClientHeight;
+        appSettings.WindowWidth = WindowState == FormWindowState.Normal ? Width : appSettings.WindowWidth;
+        appSettings.WindowHeight = WindowState == FormWindowState.Normal
+            ? Math.Max(MinimumWindowHeight, Height - (areDetailsVisible ? GetCurrentDetailsRowHeight() : 0))
+            : appSettings.WindowHeight;
 
         if (!appSettingsService.Save(appSettings, out var errorMessage) && !string.IsNullOrWhiteSpace(errorMessage))
         {
@@ -3839,7 +4857,7 @@ public sealed class MainForm : Form
         }
 
         return item.FpsSelectionMode == FpsSelectionMode.AutoDetect
-            ? "Detected from Mirasys frame records."
+            ? "Detected from Spotter frame records."
             : "Manual FPS selection.";
     }
 
@@ -3877,6 +4895,7 @@ public sealed class MainForm : Form
         lines.Add($"FFmpeg FPS value: {(item.RequiresManualFpsSelection || !item.HasResolvedFps ? "Not set" : item.FfmpegRateValue)}");
         lines.Add($"FPS confidence: {FormatOptionalValue(item.RequiresManualFpsSelection || !item.HasResolvedFps ? "Unavailable" : item.FpsConfidence, "Unknown")}");
         lines.Add($"FPS note: {FormatQueueItemFpsNote(item)}");
+        lines.Add($"Export segment: {item.MultiFileExportContext?.DisplayText ?? "None detected"}");
 
         if (item.PreProbeResult is not null)
         {
@@ -3947,6 +4966,14 @@ public sealed class MainForm : Form
         if (!string.IsNullOrWhiteSpace(item.FpsTechnicalLogText))
         {
             technicalLog.AppendBlock(title, item.FpsTechnicalLogText);
+        }
+    }
+
+    private void AppendMultiFileExportTechnicalLog(string? technicalLogText)
+    {
+        if (!string.IsNullOrWhiteSpace(technicalLogText))
+        {
+            technicalLog.AppendBlock("Queue item multi-file export detection", technicalLogText);
         }
     }
 
@@ -4130,19 +5157,20 @@ public sealed class MainForm : Form
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(16),
+            AutoScroll = true,
+            Padding = new Padding(12),
             ColumnCount = 1,
             RowCount = 10
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 154));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 168));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 180));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, ActionRowHeight));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, ActionRowHeight));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 112));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, ActionRowHeight));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, ActionRowHeight));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         detailsRowStyle = new RowStyle(SizeType.Absolute, 0);
         root.RowStyles.Add(detailsRowStyle);
         rootLayout = root;
@@ -4172,7 +5200,7 @@ public sealed class MainForm : Form
             RowCount = 1,
             Margin = new Padding(0)
         };
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 54));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 46));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -4180,7 +5208,7 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             SizeMode = PictureBoxSizeMode.Zoom,
-            Margin = new Padding(0, 2, 10, 4)
+            Margin = new Padding(0, 2, 8, 2)
         };
         panel.Controls.Add(headerLogoPictureBox, 0, 0);
 
@@ -4189,7 +5217,7 @@ public sealed class MainForm : Form
             AutoSize = false,
             Dock = DockStyle.Fill,
             Text = "DAT Converter",
-            Font = new Font(Font.FontFamily, 14F, FontStyle.Bold),
+            Font = new Font(Font.FontFamily, 13F, FontStyle.Bold),
             TextAlign = ContentAlignment.MiddleLeft,
             Margin = new Padding(0)
         };
@@ -4205,7 +5233,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 3,
             RowCount = 3,
-            Padding = new Padding(0, 2, 0, 2)
+            Padding = new Padding(0)
         };
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 124));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -4237,8 +5265,8 @@ public sealed class MainForm : Form
             Margin = new Padding(0)
         };
 
-        browseFileButton.Size = new Size(148, 42);
-        addFolderButton.Size = new Size(166, 42);
+        browseFileButton.Size = new Size(148, 36);
+        addFolderButton.Size = new Size(166, 36);
         panel.Controls.Add(browseFileButton);
         panel.Controls.Add(addFolderButton);
         return panel;
@@ -4265,7 +5293,7 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             Text = "Batch Options",
-            Padding = new Padding(14, 28, 14, 14)
+            Padding = new Padding(14, 16, 14, 10)
         };
 
         var panel = new FlowLayoutPanel
@@ -4273,7 +5301,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
-            Padding = new Padding(6, 14, 0, 0)
+            Padding = new Padding(6, 0, 0, 0)
         };
 
         panel.Controls.Add(BuildOptionStack("Format", outputFormatComboBox, 190));
@@ -4305,7 +5333,7 @@ public sealed class MainForm : Form
             Text = "Double-click a row to change filename or save location.",
             TextAlign = ContentAlignment.MiddleLeft,
             ForeColor = SystemColors.GrayText,
-            Margin = new Padding(2, 4, 0, 4)
+            Margin = new Padding(2, 2, 0, 2)
         };
 
         var noteLabel = new Label
@@ -4315,7 +5343,7 @@ public sealed class MainForm : Form
             Text = "Option choices lock when queue starts.",
             TextAlign = ContentAlignment.MiddleRight,
             ForeColor = SystemColors.GrayText,
-            Margin = new Padding(8, 4, 0, 4)
+            Margin = new Padding(8, 2, 0, 2)
         };
 
         panel.Controls.Add(helpLabel, 0, 0);
@@ -4330,7 +5358,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 5,
             RowCount = 1,
-            Padding = new Padding(0, 4, 0, 4)
+            Padding = new Padding(0, 3, 0, 3)
         };
 
         for (var column = 0; column < 5; column++)
@@ -4354,7 +5382,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 5,
             RowCount = 1,
-            Padding = new Padding(0, 4, 0, 4)
+            Padding = new Padding(0, 3, 0, 3)
         };
 
         for (var column = 0; column < 5; column++)
@@ -4365,7 +5393,7 @@ public sealed class MainForm : Form
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         AddActionButtonToGrid(panel, cancelButton, 0);
         AddActionButtonToGrid(panel, stopAfterCurrentButton, 1);
-        panel.Controls.Add(new Panel { Dock = DockStyle.Fill }, 2, 0);
+        AddActionButtonToGrid(panel, duplicateSelectedQueueItemButton, 2);
         AddActionButtonToGrid(panel, cancelQueueButton, 3);
         AddActionButtonToGrid(panel, startQueueButton, 4);
         return panel;
@@ -4389,7 +5417,7 @@ public sealed class MainForm : Form
         };
         panel.SuspendLayout();
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, DetailsFooterHeight));
 
         panel.Controls.Add(statusLogTextBox, 0, 0);
         panel.Controls.Add(BuildDetailsButtonPanel(), 0, 1);
@@ -4435,16 +5463,16 @@ public sealed class MainForm : Form
         var panel = new Panel
         {
             Width = comboWidth,
-            Height = 96,
+            Height = 70,
             Margin = new Padding(0, 0, 70, 0)
         };
 
         var label = CreateOptionLabel(labelText);
         label.Location = new Point(0, 0);
-        label.Size = new Size(comboWidth, 26);
+        label.Size = new Size(comboWidth, 22);
 
         comboBox.Dock = DockStyle.None;
-        comboBox.Location = new Point(0, 38);
+        comboBox.Location = new Point(0, 28);
         comboBox.Size = new Size(comboWidth, 30);
         comboBox.MinimumSize = new Size(comboWidth, 30);
         comboBox.Margin = new Padding(0);
@@ -4482,6 +5510,8 @@ public sealed class MainForm : Form
     private void RegisterQueueDeselectHandlers(Control control)
     {
         if (ReferenceEquals(control, queueGridView) ||
+            ReferenceEquals(control, removeSelectedQueueItemButton) ||
+            ReferenceEquals(control, duplicateSelectedQueueItemButton) ||
             ReferenceEquals(control, openOutputFolderButton) ||
             ReferenceEquals(control, detailsPanel) ||
             ReferenceEquals(control, copyLogButton))
@@ -4542,6 +5572,7 @@ public sealed class MainForm : Form
         gridView.Columns.Add(CreateQueueColumn("Format", "Format", QueueFormatColumnWidth));
         gridView.Columns.Add(CreateQueueColumn("Mode", "Mode", QueueModeColumnWidth));
         gridView.Columns.Add(CreateQueueColumn("Fps", "FPS", QueueFpsColumnWidth));
+        gridView.Columns.Add(CreateQueueColumn("Resolution", "Resolution", QueueResolutionColumnWidth));
         gridView.Columns.Add(CreateQueueColumn("Progress", "Progress", QueueProgressColumnWidth));
         return gridView;
     }

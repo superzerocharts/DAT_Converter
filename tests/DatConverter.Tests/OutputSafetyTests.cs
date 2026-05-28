@@ -386,6 +386,71 @@ public sealed class OutputSafetyTests
         Assert.False(File.Exists(outputPath));
     }
 
+    [Fact]
+    public async Task ConversionService_BurnTimestampFailureReportsBundledFfmpegMessage()
+    {
+        using var temp = new TempDirectory();
+        var sourcePath = Path.Combine(temp.Path, "source.dat");
+        var outputPath = Path.Combine(temp.Path, "source.mp4");
+        File.WriteAllText(sourcePath, "original source bytes");
+        var tools = new FfmpegTools(temp.Path, Path.Combine(temp.Path, "ffmpeg.exe"), Path.Combine(temp.Path, "ffprobe.exe"), true, true);
+        var service = new ConversionService(
+            tools,
+            InternalConversionPathOptions.Default,
+            (_, _, _) => throw new InvalidOperationException("Clean extraction should not run for direct encode."),
+            (_, _, _, _, _, _) => Task.FromResult(new ProcessRunResult(1, false, false, "", "No such filter: 'drawtext'")));
+
+        var result = await service.EncodeAsync(
+            sourcePath,
+            outputPath,
+            OutputFormat.Mp4,
+            FpsOption.FromLabel("30"),
+            null,
+            null,
+            CancellationToken.None,
+            burnTimestamp: new BurnTimestampOptions("Camera", new DateTime(2026, 5, 22, 4, 40, 12)));
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(BurnTimestampMetadataBuilder.BundledFfmpegUnavailableMessage, result.UserMessage);
+        Assert.Contains("drawtext", string.Join(" ", result.Arguments));
+        Assert.False(File.Exists(outputPath));
+    }
+
+    [Fact]
+    public async Task ConversionService_BurnTimestampMissingFontWarningIsPreserved()
+    {
+        using var temp = new TempDirectory();
+        var sourcePath = Path.Combine(temp.Path, "source.dat");
+        var outputPath = Path.Combine(temp.Path, "source.mp4");
+        File.WriteAllText(sourcePath, "original source bytes");
+        var tools = new FfmpegTools(temp.Path, Path.Combine(temp.Path, "ffmpeg.exe"), Path.Combine(temp.Path, "ffprobe.exe"), true, true);
+        var service = new ConversionService(
+            tools,
+            InternalConversionPathOptions.Default,
+            (_, _, _) => throw new InvalidOperationException("Clean extraction should not run for direct encode."),
+            (_, _, _, _, _, _) =>
+            {
+                File.WriteAllText(outputPath, "output");
+                return Task.FromResult(new ProcessRunResult(0, false, false, "", ""));
+            });
+
+        var result = await service.EncodeAsync(
+            sourcePath,
+            outputPath,
+            OutputFormat.Mp4,
+            FpsOption.FromLabel("30"),
+            null,
+            null,
+            CancellationToken.None,
+            burnTimestamp: new BurnTimestampOptions(
+                "Camera",
+                new DateTime(2026, 5, 22, 4, 40, 12),
+                FontWarning: BurnTimestampFontResolver.MissingPreferredFontWarning));
+
+        Assert.True(result.IsSuccess, result.StandardError);
+        Assert.Contains(BurnTimestampFontResolver.MissingPreferredFontWarning, result.StandardError);
+    }
+
     private sealed class TempDirectory : IDisposable
     {
         public TempDirectory()

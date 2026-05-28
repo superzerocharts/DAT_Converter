@@ -22,6 +22,11 @@ public static class SelectedItemDetailsFormatter
             FormatField("FFmpeg FPS value", FormatFfmpegRateValue(item)),
             FormatField("FPS confidence", FormatFpsConfidence(item)),
             FormatField("FPS note", FormatFpsNote(item)),
+            FormatField("Source type", FormatSourceType(item)),
+            FormatField("Parts", FormatParts(item)),
+            FormatField("Export segment", FormatExportSegment(item)),
+            FormatField("Split recording segments", FormatSplitSegments(item)),
+            FormatField("Trim", TrimRangeFormatter.FormatTrimState(item)),
             FormatField("Probe status", FormatProbeStatus(item)),
             FormatField("Conversion status", FormatConversionStatus(item)),
             FormatField("Duration available", FormatYesNo(duration.HasValue)),
@@ -47,6 +52,11 @@ public static class SelectedItemDetailsFormatter
             "FFmpeg FPS value:",
             "FPS confidence:",
             "FPS note:",
+            "Source type:",
+            "Parts:",
+            "Export segment:",
+            "Split recording segments:",
+            "Trim:",
             "Probe status:",
             "Conversion status:",
             "Duration available:",
@@ -140,7 +150,7 @@ public static class SelectedItemDetailsFormatter
         }
 
         return item.FpsSelectionMode == FpsSelectionMode.AutoDetect
-            ? "Detected from Mirasys frame records."
+            ? "Detected from Spotter frame records."
             : "Manual FPS selection.";
     }
 
@@ -163,6 +173,30 @@ public static class SelectedItemDetailsFormatter
         return item.RequiresManualFpsSelection || !item.HasResolvedFps
             ? "Unavailable"
             : item.FpsConfidence;
+    }
+
+    private static string FormatExportSegment(QueueItem item)
+    {
+        return item.MultiFileExportContext?.DisplayText ?? "None detected";
+    }
+
+    private static string FormatSourceType(QueueItem item)
+    {
+        return item.IsSplitRecording ? "Split recording" : "Single DAT";
+    }
+
+    private static string FormatParts(QueueItem item)
+    {
+        return item.IsSplitRecording
+            ? item.SplitExportPlan!.SegmentCount.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "1";
+    }
+
+    private static string FormatSplitSegments(QueueItem item)
+    {
+        return item.IsSplitRecording
+            ? string.Join(", ", item.SplitExportPlan!.Segments.Select(segment => segment.FileName))
+            : "None";
     }
 
     private static string FormatOptionalExitCode(int? exitCode)

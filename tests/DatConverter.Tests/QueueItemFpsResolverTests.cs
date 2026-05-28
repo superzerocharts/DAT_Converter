@@ -39,7 +39,7 @@ public sealed class QueueItemFpsResolverTests
             FfmpegRateValue = "30",
             UserFacingLabel = "Auto 30 fps",
             Confidence = "High",
-            DecisionReason = "Detected from Mirasys frame records.",
+            DecisionReason = "Detected from Spotter frame records.",
             TechnicalLogText = "average_fps: 29.900"
         });
 
@@ -52,7 +52,7 @@ public sealed class QueueItemFpsResolverTests
         Assert.True(result.AutoDetectionSucceeded);
         Assert.Equal("High", result.Confidence);
         Assert.Null(result.Warning);
-        Assert.Equal("Detected from Mirasys frame records.", result.DecisionReason);
+        Assert.Equal("Detected from Spotter frame records.", result.DecisionReason);
         Assert.Contains("29.900", result.TechnicalLogText);
     }
 
@@ -75,7 +75,7 @@ public sealed class QueueItemFpsResolverTests
         Assert.Equal("25", result.FfmpegRateValue);
         Assert.Equal(25, result.NominalConversionFps);
         Assert.Null(result.Warning);
-        Assert.Equal("Detected from Mirasys frame records.", result.DecisionReason);
+        Assert.Equal("Detected from Spotter frame records.", result.DecisionReason);
     }
 
     [Fact]
@@ -145,6 +145,27 @@ public sealed class QueueItemFpsResolverTests
     }
 
     [Fact]
+    public void ResolveQueueItemFps_WithRealKnownGoodMultiSegmentExport_WhenPresent_ResolvesAuto30()
+    {
+        var sampleDirectory = @"W:\Projects\Cam 8379 - 4 hr clip";
+        var datPath = Path.Combine(sampleDirectory, "dvrfile00000001.dat");
+        if (!File.Exists(datPath))
+        {
+            return;
+        }
+
+        var result = new QueueItemFpsResolver().ResolveQueueItemFps(datPath, QueueItemFpsSettings.AutoDetect());
+
+        Assert.Equal(FpsSelectionMode.AutoDetect, result.SelectionMode);
+        Assert.Equal("Auto 30", result.DisplayLabel);
+        Assert.Equal("30", result.FfmpegRateValue);
+        Assert.Equal(30, result.NominalConversionFps);
+        Assert.False(result.RequiresManualFpsSelection);
+        Assert.Equal("Medium", result.Confidence);
+        Assert.Contains("DefaultTimebase", result.TechnicalLogText);
+    }
+
+    [Fact]
     public void ResolveQueueItemFps_WithRealCorruptTimestampSample_WhenPresent_RequiresManualFps()
     {
         var datPath = @"W:\Projects\Camera 205 Sample\Camera 205 Sample\dvrfile00000001_corrupt_fps_timestamps.dat";
@@ -177,14 +198,14 @@ public sealed class QueueItemFpsResolverTests
     }
 
     private static QueueItemFpsResolver CreateResolver(
-        Func<MirasysFpsDetectionResult, FpsDecisionResult> decide,
+        Func<SpotterFpsDetectionResult, FpsDecisionResult> decide,
         bool detectionSucceeded = true)
     {
         return new QueueItemFpsResolver(
-            (_, _) => new MirasysFpsDetectionResult
+            (_, _) => new SpotterFpsDetectionResult
             {
                 Succeeded = detectionSucceeded,
-                FailureReason = detectionSucceeded ? "" : "No Mirasys frame records were found.",
+                FailureReason = detectionSucceeded ? "" : "No Spotter frame records were found.",
                 Confidence = detectionSucceeded ? "High" : "Low"
             },
             decide,

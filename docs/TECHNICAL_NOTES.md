@@ -1,7 +1,7 @@
 # DAT Converter Technical Notes
 
 ## Purpose
-DAT Converter is a focused Windows desktop utility for converting Mirasys/Spotter `.dat` surveillance exports to MP4 or MKV using bundled FFmpeg tools. It is intentionally not a general video converter. The app assumes Mirasys-style raw H.264 payloads and presents a small workflow for safe batch conversion.
+DAT Converter is a focused Windows desktop utility for converting Spotter/Spotter `.dat` surveillance exports to MP4 or MKV using bundled FFmpeg tools. It is intentionally not a general video converter. The app assumes Spotter-style raw H.264 payloads and presents a small workflow for safe batch conversion.
 
 ## Scope Rules
 - Input is limited to `.dat` files.
@@ -18,7 +18,7 @@ DAT Converter is a focused Windows desktop utility for converting Mirasys/Spotte
   - `QueueItemRefreshService` refreshes editable items from live/global settings without clobbering custom fields.
   - `QueueSettingsLockService` applies locked queue defaults when processing starts.
   - `QueueProcessingEligibilityService`, `QueuePreProbeService`, `QueueRunningValidationService`, and `QueueFpsValidationService` define readiness and blocking rules.
-- FPS detection is split between `MirasysFpsDetector`, `FpsDecisionPolicy`, `MirasysSidecarLookup`, and `QueueItemFpsResolver`.
+- FPS detection is split between `SpotterFpsDetector`, `FpsDecisionPolicy`, `SpotterSidecarLookup`, and `QueueItemFpsResolver`.
 - `ProbeService` validates raw H.264 compatibility using bundled `ffprobe.exe` and a short `ffmpeg.exe` fallback pass.
 - `ConversionService` runs FFmpeg conversion commands and reports progress/results.
 - `OutputPathService` and `PartialOutputService` provide output safety, no-overwrite behavior, and partial/canceled output handling.
@@ -47,7 +47,7 @@ DAT Converter is a focused Windows desktop utility for converting Mirasys/Spotte
   - 24
   - 20
   - 15
-- Auto-detect scans Mirasys frame records identified by ASCII `H264` and `I264` markers.
+- Auto-detect scans Spotter frame records identified by ASCII `H264` and `I264` markers.
 - Accepted frame records read:
   - timestamp at marker offset `-16` as little-endian `uint64`
   - width at offset `-8`
@@ -57,7 +57,7 @@ DAT Converter is a focused Windows desktop utility for converting Mirasys/Spotte
 - Without a valid sidecar, detection uses the DAT-only fallback timebase.
 - The decision policy prefers stable bucket evidence over noisy total average FPS and maps to supported nominal rates.
 - Low-confidence or failed Auto-detect is not silently converted with assumed 30. The row shows `Needs FPS` and requires manual selection before conversion, unless the item is skipped because output already exists.
-- Corrupt or unusable Mirasys timestamps should fail cleanly with unresolved FPS, not crash.
+- Corrupt or unusable Spotter timestamps should fail cleanly with unresolved FPS, not crash.
 - Manual FPS overrides resolve immediately. `29.97` maps to FFmpeg value `30000/1001`.
 
 ## Probe and Readiness
@@ -124,7 +124,7 @@ DAT Converter is a focused Windows desktop utility for converting Mirasys/Spotte
 
 ## Test/Verification Notes
 Key scenarios to preserve:
-- Normal Mirasys `.dat` with matching `.sef2` resolves Auto 30 and converts.
+- Normal Spotter `.dat` with matching `.sef2` resolves Auto 30 and converts.
 - DAT-only sample without sidecar resolves using fallback timebase.
 - Corrupt FPS timestamp sample remains H.264-compatible but shows `Needs FPS` until manual FPS is selected.
 - Unsupported `.dat` files are rejected or marked Unsupported without disrupting other queue items.

@@ -12,7 +12,7 @@ public sealed class AppSettings
 
     public string Fps { get; set; } = "Auto-detect";
 
-    public int WindowWidth { get; set; } = 960;
+    public int WindowWidth { get; set; } = 1080;
 
-    public int WindowHeight { get; set; } = 820;
+    public int WindowHeight { get; set; } = 740;
 }
