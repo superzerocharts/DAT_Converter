@@ -6071,12 +6071,13 @@ public sealed class MainForm : Form
     {
         var textBox = new TextBox
         {
-            Dock = DockStyle.Fill,
+            Anchor = AnchorStyles.Left | AnchorStyles.Right,
             ReadOnly = true,
             Text = text,
-            Margin = new Padding(0, 6, 12, 4)
+            Margin = new Padding(0, 0, 12, 0)
         };
         textBox.MinimumSize = new Size(0, textBox.PreferredHeight);
+        textBox.Height = textBox.PreferredHeight;
         return textBox;
     }
 }
