@@ -18,6 +18,19 @@ public sealed class BurnTimestampMetadataBuilderTests
     }
 
     [Fact]
+    public void Build_WithSplitCameraDisplayName_PrefersCameraDisplayName()
+    {
+        var item = CreateSplitItem("8379 Marquee Northeast PTZ");
+        item.BurnTimestamp = true;
+        var timeline = RecordingTimelineBuilder.Build(item);
+
+        var options = BurnTimestampMetadataBuilder.Build(item, timeline);
+
+        Assert.NotNull(options);
+        Assert.Equal("8379 Marquee Northeast PTZ", options.CameraName);
+    }
+
+    [Fact]
     public void Build_RuntimeOnlyTimelineReturnsNull()
     {
         var item = new QueueItem(
@@ -48,7 +61,7 @@ public sealed class BurnTimestampMetadataBuilderTests
         Assert.Equal(expected, BurnTimestampMetadataBuilder.IsSupportedMode(mode));
     }
 
-    private static QueueItem CreateSplitItem()
+    private static QueueItem CreateSplitItem(string? cameraDisplayName = null)
     {
         const string root = @"C:\video\Cam 8379 - 4 hr clip";
         var firstPath = Path.Combine(root, "dvrfile00000001.dat");
@@ -67,6 +80,7 @@ public sealed class BurnTimestampMetadataBuilderTests
             {
                 ExportFolder = root,
                 LogicalOutputBaseName = "Cam 8379 - 4 hr clip",
+                CameraDisplayName = cameraDisplayName,
                 Confidence = "Strong",
                 Segments =
                 [

@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Text;
 using System.Xml.Linq;
 
 namespace DatConverter;
@@ -48,6 +49,7 @@ public sealed class SpotterSplitExportPlanBuilder
                 ExportFolder = folder,
                 SelectedSourcePath = selectedSourcePath,
                 LogicalOutputBaseName = ResolveLogicalOutputBaseName(sidecar.Path, folder),
+                CameraDisplayName = sidecar.CameraDisplayName,
                 Confidence = "None",
                 Warnings = warnings,
                 Evidence = evidence
@@ -58,6 +60,11 @@ public sealed class SpotterSplitExportPlanBuilder
         if (!string.IsNullOrWhiteSpace(sidecar.Path))
         {
             evidence.Add($"Sidecar: {sidecar.Path}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(sidecar.CameraDisplayName))
+        {
+            evidence.Add($"Sidecar camera display name: {sidecar.CameraDisplayName}");
         }
 
         var selectedSegmentNumber = ResolveSelectedSegmentNumber(selectedSourcePath, sidecar.FileNames);
@@ -113,6 +120,7 @@ public sealed class SpotterSplitExportPlanBuilder
             ExportFolder = folder,
             SelectedSourcePath = selectedSourcePath,
             LogicalOutputBaseName = ResolveLogicalOutputBaseName(sidecar.Path, folder),
+            CameraDisplayName = sidecar.CameraDisplayName,
             Segments = segments,
             SelectedSegmentNumber = selectedSegmentNumber,
             Confidence = confidence,
@@ -161,10 +169,10 @@ public sealed class SpotterSplitExportPlanBuilder
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             warnings.Add($"Could not scan sidecar files: {ex.Message}");
-            return new SidecarSegmentList(null, Array.Empty<string>());
+            return new SidecarSegmentList(null, Array.Empty<string>(), null);
         }
 
-        SidecarSegmentList best = new(null, Array.Empty<string>());
+        SidecarSegmentList best = new(null, Array.Empty<string>(), null);
         foreach (var sidecarPath in sidecarPaths)
         {
             var parsed = ReadSidecar(sidecarPath, warnings);
@@ -190,13 +198,14 @@ public sealed class SpotterSplitExportPlanBuilder
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Cast<string>()
                 .ToList();
+            var cameraDisplayName = ExtractCameraDisplayName(document);
 
-            return new SidecarSegmentList(sidecarPath, fileNames);
+            return new SidecarSegmentList(sidecarPath, fileNames, cameraDisplayName);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
         {
             warnings.Add($"Sidecar could not be read: {sidecarPath}; Error: {ex.Message}");
-            return new SidecarSegmentList(sidecarPath, Array.Empty<string>());
+            return new SidecarSegmentList(sidecarPath, Array.Empty<string>(), null);
         }
     }
 
@@ -360,7 +369,61 @@ public sealed class SpotterSplitExportPlanBuilder
             : null;
     }
 
-    private readonly record struct SidecarSegmentList(string? Path, IReadOnlyList<string> FileNames);
+    private static string? ExtractCameraDisplayName(XDocument document)
+    {
+        foreach (var element in document.Descendants())
+        {
+            if (!IsCameraNameCandidateElement(element.Name.LocalName))
+            {
+                continue;
+            }
+
+            var decoded = DecodeCameraDisplayName((string?)element.Attribute("name"));
+            if (!string.IsNullOrWhiteSpace(decoded))
+            {
+                return decoded;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsCameraNameCandidateElement(string localName)
+    {
+        return string.Equals(localName, "video", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(localName, "material", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(localName, "videoChannel", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(localName, "materialChannel", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? DecodeCameraDisplayName(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        try
+        {
+            var bytes = Convert.FromBase64String(value.Trim());
+            var decoded = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true)
+                .GetString(bytes)
+                .Trim();
+            return string.IsNullOrWhiteSpace(decoded) || decoded.Contains('\uFFFD')
+                ? null
+                : decoded;
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+        catch (DecoderFallbackException)
+        {
+            return null;
+        }
+    }
+
+    private readonly record struct SidecarSegmentList(string? Path, IReadOnlyList<string> FileNames, string? CameraDisplayName);
 
     private readonly record struct MaterialIndexRecords(string Path, IReadOnlyList<MaterialIndexRecord> Records);
 

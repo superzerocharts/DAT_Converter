@@ -11,6 +11,8 @@ public sealed class SpotterSplitExportPlan
 
     public string? LogicalOutputBaseName { get; init; }
 
+    public string? CameraDisplayName { get; init; }
+
     public IReadOnlyList<SpotterSplitExportSegment> Segments { get; init; } = Array.Empty<SpotterSplitExportSegment>();
 
     public int SegmentCount => Segments.Count;
@@ -33,6 +35,7 @@ public sealed class SpotterSplitExportPlan
         builder.AppendLine("Split export plan");
         builder.AppendLine(CultureInfo.InvariantCulture, $"Export folder: {ExportFolder}");
         builder.AppendLine(CultureInfo.InvariantCulture, $"Selected source: {SelectedSourcePath ?? "none"}");
+        builder.AppendLine(CultureInfo.InvariantCulture, $"Camera display name: {CameraDisplayName ?? "none"}");
         builder.AppendLine(CultureInfo.InvariantCulture, $"Segment count: {SegmentCount}");
         builder.AppendLine(CultureInfo.InvariantCulture, $"Selected segment: {SelectedSegmentNumber?.ToString(CultureInfo.InvariantCulture) ?? "none"}");
         builder.AppendLine(CultureInfo.InvariantCulture, $"Confidence: {Confidence}");

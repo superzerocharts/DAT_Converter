@@ -45,6 +45,47 @@ public sealed class SpotterSplitExportPlanBuilderTests
     }
 
     [Fact]
+    public void Build_WithSidecarCameraName_DecodesCameraDisplayName()
+    {
+        using var temp = new TempDirectory();
+        var files = CreateSegmentFiles(temp.Path, 2);
+        WriteSidecar(
+            Path.Combine(temp.Path, "Cam 8379 - 4 hr clip.sef2"),
+            "ODM3OSBNYXJxdWVlIE5vcnRoZWFzdCBQVFo=",
+            files.Select(Path.GetFileName)!);
+        var start = new DateTime(2026, 5, 22, 3, 59, 59, 480);
+        WriteMaterialFolderIndex(
+            temp.Path,
+            (1, start, start.AddSeconds(10)),
+            (2, start.AddSeconds(10).AddMilliseconds(34), start.AddSeconds(20)));
+
+        var plan = new SpotterSplitExportPlanBuilder().Build(temp.Path);
+
+        Assert.Equal("8379 Marquee Northeast PTZ", plan.CameraDisplayName);
+    }
+
+    [Fact]
+    public void Build_WithInvalidSidecarCameraName_IgnoresCameraDisplayName()
+    {
+        using var temp = new TempDirectory();
+        var files = CreateSegmentFiles(temp.Path, 2);
+        WriteSidecar(
+            Path.Combine(temp.Path, "Cam 8379 - 4 hr clip.sef2"),
+            "not valid base64",
+            files.Select(Path.GetFileName)!);
+        var start = new DateTime(2026, 5, 22, 3, 59, 59, 480);
+        WriteMaterialFolderIndex(
+            temp.Path,
+            (1, start, start.AddSeconds(10)),
+            (2, start.AddSeconds(10).AddMilliseconds(34), start.AddSeconds(20)));
+
+        var plan = new SpotterSplitExportPlanBuilder().Build(temp.Path);
+
+        Assert.Null(plan.CameraDisplayName);
+        Assert.Equal("Cam 8379 - 4 hr clip", plan.LogicalOutputBaseName);
+    }
+
+    [Fact]
     public void Build_WithSelectedSegment_ResolvesSelectedSegmentNumber()
     {
         using var temp = new TempDirectory();
@@ -197,6 +238,25 @@ public sealed class SpotterSplitExportPlanBuilderTests
             path,
             $"""
             <archive2>
+              <files>
+            {fileLines}
+              </files>
+            </archive2>
+            """);
+    }
+
+    private static void WriteSidecar(string path, string cameraDisplayNameBase64, IEnumerable<string?> fileNames)
+    {
+        var fileLines = string.Join(
+            Environment.NewLine,
+            fileNames.Select(fileName => $"""    <file name="{fileName}" />"""));
+        File.WriteAllText(
+            path,
+            $"""
+            <archive2>
+              <video>
+                <material name="{cameraDisplayNameBase64}" />
+              </video>
               <files>
             {fileLines}
               </files>

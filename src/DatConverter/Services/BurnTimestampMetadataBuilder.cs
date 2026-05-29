@@ -29,6 +29,11 @@ public static class BurnTimestampMetadataBuilder
 
     private static string ResolveCameraName(QueueItem item)
     {
+        if (!string.IsNullOrWhiteSpace(item.SplitExportPlan?.CameraDisplayName))
+        {
+            return item.SplitExportPlan.CameraDisplayName;
+        }
+
         if (!string.IsNullOrWhiteSpace(item.LogicalOutputBaseName))
         {
             return item.LogicalOutputBaseName;
