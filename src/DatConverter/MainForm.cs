@@ -305,8 +305,8 @@ public sealed class MainForm : Form
             AutoSize = false,
             Dock = DockStyle.Fill,
             Text = currentUserStatus,
-            TextAlign = ContentAlignment.MiddleLeft,
-            Padding = new Padding(4, 0, 4, 0)
+            TextAlign = ContentAlignment.TopLeft,
+            Padding = new Padding(4, 3, 4, 5)
         };
         normalStatusFont = currentStatusLabel.Font;
         boldStatusFont = new Font(normalStatusFont, FontStyle.Bold);
@@ -5384,7 +5384,7 @@ public sealed class MainForm : Form
         height += ActionRowHeight;
         height += ActionRowHeight;
         height += Math.Max(42, conversionProgressBar.PreferredSize.Height + conversionProgressBar.Margin.Vertical);
-        height += Math.Max(40, currentStatusLabel.PreferredHeight);
+        height += GetStatusRowHeight();
 
         return new Size(width, height);
     }
@@ -5405,6 +5405,13 @@ public sealed class MainForm : Form
         var headerHeight = queueGridView.ColumnHeadersHeight > 0 ? queueGridView.ColumnHeadersHeight : 32;
         var borderHeight = SystemInformation.BorderSize.Height * 2;
         return Math.Max(MinimumQueueGridHeight, headerHeight + (rowHeight * MinimumQueueVisibleRows) + borderHeight + 6);
+    }
+
+    private int GetStatusRowHeight()
+    {
+        var normalHeight = TextRenderer.MeasureText("Mg", normalStatusFont).Height;
+        var boldHeight = TextRenderer.MeasureText("Mg", boldStatusFont).Height;
+        return Math.Max(40, Math.Max(normalHeight, boldHeight) + currentStatusLabel.Padding.Vertical + 4);
     }
 
     private void ApplyDetailsTextBoxTheme()
@@ -5516,7 +5523,7 @@ public sealed class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, ActionRowHeight));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, ActionRowHeight));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, GetStatusRowHeight()));
         detailsRowStyle = new RowStyle(SizeType.Absolute, 0);
         root.RowStyles.Add(detailsRowStyle);
         rootLayout = root;
