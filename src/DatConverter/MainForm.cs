@@ -5,7 +5,7 @@ public sealed class MainForm : Form
     private const int DetailsExpandedHeight = 220;
     private const int DetailsFooterHeight = 54;
     private const int DefaultWindowWidth = 1080;
-    private const int DefaultWindowHeight = 740;
+    private const int DefaultWindowHeight = 820;
     private const int MinimumWindowWidth = 960;
     private const int MinimumWindowHeight = 680;
     private const int WindowScreenMargin = 40;
@@ -13,7 +13,8 @@ public sealed class MainForm : Form
     private const int FileSelectionRowHeight = 156;
     private const int MinimumBatchOptionsRowHeight = 128;
     private const int MinimumBatchOptionStackHeight = 78;
-    private const int MinimumQueueGridHeight = 92;
+    private const int MinimumQueueVisibleRows = 3;
+    private const int MinimumQueueGridHeight = 128;
     private const int MinimumFlexibleContentWidth = 760;
     private const int QueueStatusColumnWidth = 108;
     private const int QueueFileColumnWidth = 202;
@@ -148,8 +149,6 @@ public sealed class MainForm : Form
 
     private const int EmGetScrollPos = 0x04DD;
     private const int EmSetScrollPos = 0x04DE;
-    private const int WmSetRedraw = 0x000B;
-
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
     private struct NativePoint
     {
@@ -319,10 +318,13 @@ public sealed class MainForm : Form
             ScrollBars = RichTextBoxScrollBars.Both,
             Text = currentUserStatus,
             WordWrap = false,
-            BackColor = SystemColors.Window,
+            BackColor = Color.White,
+            ForeColor = Color.Black,
             BorderStyle = BorderStyle.Fixed3D,
-            DetectUrls = false
+            DetectUrls = false,
+            HideSelection = false
         };
+        statusLogTextBox.HandleCreated += (_, _) => ApplyDetailsTextBoxTheme();
         openOutputFolderButton = CreateButton("Open Output");
         openOutputFolderButton.Size = new Size(250, 42);
         openOutputFolderButton.TextAlign = ContentAlignment.MiddleCenter;
@@ -4451,7 +4453,6 @@ public sealed class MainForm : Form
             return;
         }
 
-        SetRootRedraw(enabled: false);
         SuspendLayout();
         rootLayout?.SuspendLayout();
         detailsPanel?.SuspendLayout();
@@ -4507,8 +4508,10 @@ public sealed class MainForm : Form
             detailsPanel?.ResumeLayout(false);
             rootLayout?.ResumeLayout(true);
             ResumeLayout(true);
-            SetRootRedraw(enabled: true);
-            Invalidate();
+            PerformLayout();
+            detailsPanel?.Invalidate(true);
+            statusLogTextBox.Invalidate();
+            Invalidate(true);
         }
     }
 
@@ -4675,10 +4678,10 @@ public sealed class MainForm : Form
         var selectionLength = statusLogTextBox.SelectionLength;
 
         statusLogTextBox.SuspendLayout();
-        SetDetailsRedraw(enabled: false);
 
         try
         {
+            ApplyDetailsTextBoxTheme();
             statusLogTextBox.Text = displayText;
 
             if (preserveSelection)
@@ -4703,7 +4706,6 @@ public sealed class MainForm : Form
         }
         finally
         {
-            SetDetailsRedraw(enabled: true);
             statusLogTextBox.ResumeLayout();
             statusLogTextBox.Invalidate();
         }
@@ -4737,19 +4739,6 @@ public sealed class MainForm : Form
     {
         statusLogTextBox.Select(statusLogTextBox.TextLength, 0);
         statusLogTextBox.ScrollToCaret();
-    }
-
-    private void SetDetailsRedraw(bool enabled)
-    {
-        SendMessage(statusLogTextBox.Handle, WmSetRedraw, enabled ? new IntPtr(1) : IntPtr.Zero, IntPtr.Zero);
-    }
-
-    private void SetRootRedraw(bool enabled)
-    {
-        if (IsHandleCreated)
-        {
-            SendMessage(Handle, WmSetRedraw, enabled ? new IntPtr(1) : IntPtr.Zero, IntPtr.Zero);
-        }
     }
 
     private void UpdateConvertButtonState()
@@ -5370,7 +5359,7 @@ public sealed class MainForm : Form
         height += FileSelectionRowHeight;
         height += GetBatchOptionsMinimumHeight();
         height += 34;
-        height += MinimumQueueGridHeight;
+        height += GetMinimumQueueGridHeight();
         height += ActionRowHeight;
         height += ActionRowHeight;
         height += Math.Max(28, conversionProgressBar.PreferredSize.Height);
@@ -5387,6 +5376,22 @@ public sealed class MainForm : Form
         }
 
         return MinimumBatchOptionsRowHeight;
+    }
+
+    private int GetMinimumQueueGridHeight()
+    {
+        var rowHeight = queueGridView.RowTemplate.Height > 0 ? queueGridView.RowTemplate.Height : 28;
+        var headerHeight = queueGridView.ColumnHeadersHeight > 0 ? queueGridView.ColumnHeadersHeight : 32;
+        var borderHeight = SystemInformation.BorderSize.Height * 2;
+        return Math.Max(MinimumQueueGridHeight, headerHeight + (rowHeight * MinimumQueueVisibleRows) + borderHeight + 6);
+    }
+
+    private void ApplyDetailsTextBoxTheme()
+    {
+        statusLogTextBox.BackColor = Color.White;
+        statusLogTextBox.ForeColor = Color.Black;
+        statusLogTextBox.SelectionBackColor = SystemColors.Highlight;
+        statusLogTextBox.SelectionColor = SystemColors.HighlightText;
     }
 
     private int GetMinimumQueueHeaderWidth()
@@ -5499,6 +5504,7 @@ public sealed class MainForm : Form
         root.Controls.Add(BuildFileSelectionPanel(), 0, 1);
         root.Controls.Add(BuildOptionsPanel(), 0, 2);
         root.Controls.Add(BuildQueueSettingsNotePanel(), 0, 3);
+        queueGridView.MinimumSize = new Size(0, GetMinimumQueueGridHeight());
         root.Controls.Add(queueGridView, 0, 4);
         root.Controls.Add(BuildQueueActionPanel(), 0, 5);
         root.Controls.Add(BuildActionPanel(), 0, 6);
@@ -5741,7 +5747,8 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             RowCount = 2,
-            Margin = new Padding(0)
+            Margin = new Padding(0),
+            BackColor = SystemColors.Control
         };
         panel.SuspendLayout();
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -5760,7 +5767,8 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 4,
             RowCount = 1,
-            Padding = new Padding(0, 4, 0, 4)
+            Padding = new Padding(0, 4, 0, 4),
+            BackColor = SystemColors.Control
         };
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 206));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));

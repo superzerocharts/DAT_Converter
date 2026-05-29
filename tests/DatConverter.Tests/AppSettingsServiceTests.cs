@@ -104,7 +104,7 @@ public sealed class AppSettingsServiceTests
             new System.Drawing.Rectangle(0, 0, 1536, 824));
 
         Assert.Equal(1080, size.Width);
-        Assert.Equal(740, size.Height);
+        Assert.Equal(744, size.Height);
     }
 
     [Fact]
