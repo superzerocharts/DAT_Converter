@@ -664,7 +664,7 @@ public sealed class MainForm : Form
             MinimizeBox = false,
             MaximizeBox = false,
             ShowInTaskbar = false,
-            ClientSize = new Size(760, 376),
+            ClientSize = new Size(760, 300),
             Font = Font
         };
 
@@ -675,10 +675,10 @@ public sealed class MainForm : Form
             ColumnCount = 1,
             RowCount = 4
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 84));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
 
         var folderLabel = CreateLabel("Selected folder:");
         var folderTextBox = new TextBox
@@ -687,7 +687,7 @@ public sealed class MainForm : Form
             ReadOnly = true,
             Text = folderPath,
             BackColor = SystemColors.Window,
-            Margin = new Padding(0, 6, 0, 6)
+            Margin = new Padding(0, 4, 0, 4)
         };
         folderTextBox.MinimumSize = new Size(0, folderTextBox.PreferredHeight);
         var includeSubfoldersCheckBox = new CheckBox
@@ -696,14 +696,14 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             Text = "Include subfolders",
             TextAlign = ContentAlignment.MiddleLeft,
-            Margin = new Padding(0, 8, 0, 8)
+            Margin = new Padding(0, 4, 0, 4)
         };
         var buttonPanel = new FlowLayoutPanel
         {
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.RightToLeft,
             WrapContents = false,
-            Padding = new Padding(0, 10, 0, 0)
+            Padding = new Padding(0)
         };
         var addFilesButton = CreateButton("Add Files");
         addFilesButton.Size = new Size(130, 42);
@@ -1065,7 +1065,7 @@ public sealed class MainForm : Form
             MinimizeBox = false,
             MaximizeBox = false,
             ShowInTaskbar = false,
-            ClientSize = new Size(860, 528),
+            ClientSize = new Size(860, 500),
             Font = Font
         };
 
@@ -1083,19 +1083,19 @@ public sealed class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 66));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
 
         var saveAsTextBox = new TextBox
         {
             Dock = DockStyle.Fill,
             Text = item.PlannedOutputPath,
-            Margin = new Padding(0, 8, 8, 6)
+            Margin = new Padding(0, 7, 8, 5)
         };
         var browseButton = CreateButton("Browse...");
-        browseButton.Margin = new Padding(0, 6, 0, 6);
+        browseButton.Margin = new Padding(0, 3, 0, 3);
         var formatComboBox = CreateComboBox(new[] { "MP4", "MKV" }, item.OutputFormat.DisplayName());
         var modeComboBox = CreateComboBox(ConversionModes.DisplayOrder, FormatConversionModeForDisplay(item.ConversionMode));
         ConfigureConversionModeComboBox(modeComboBox);
@@ -1105,22 +1105,26 @@ public sealed class MainForm : Form
         {
             AutoSize = false,
             Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft,
-            Margin = new Padding(0, 0, 8, 0)
+            TextAlign = ContentAlignment.TopLeft,
+            Margin = new Padding(0, 0, 8, 0),
+            Padding = new Padding(0, 4, 0, 0)
         };
         var trimModeNoteLabel = new Label
         {
             AutoSize = false,
             Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft,
+            TextAlign = ContentAlignment.TopLeft,
             ForeColor = SystemColors.GrayText,
             Text = TrimConversionPolicy.FastModeNote,
-            Margin = new Padding(0, 0, 8, 0)
+            Margin = new Padding(0, 0, 8, 0),
+            Padding = new Padding(0, 2, 0, 0)
         };
         var trimButton = CreateButton("Trim Video");
         trimButton.Size = new Size(118, 42);
+        trimButton.Margin = new Padding(0);
         var clearTrimButton = CreateButton("Clear Trim");
         clearTrimButton.Size = new Size(112, 42);
+        clearTrimButton.Margin = new Padding(6, 0, 0, 0);
         var trimButtonPanel = new FlowLayoutPanel
         {
             AutoSize = true,
@@ -1136,12 +1140,12 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 2,
             RowCount = 2,
-            Margin = new Padding(0, 4, 0, 4)
+            Margin = new Padding(0)
         };
         trimPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         trimPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        trimPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
-        trimPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
+        trimPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        trimPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
         trimPanel.Controls.Add(trimStateLabel, 0, 0);
         trimPanel.Controls.Add(trimModeNoteLabel, 0, 1);
         trimPanel.Controls.Add(trimButtonPanel, 1, 0);
@@ -1152,17 +1156,19 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             Text = "Burn timestamp into video",
             Checked = item.BurnTimestamp,
-            TextAlign = ContentAlignment.MiddleLeft,
-            Margin = new Padding(0)
+            TextAlign = ContentAlignment.TopLeft,
+            Margin = new Padding(0),
+            Padding = new Padding(0, 2, 0, 0)
         };
         var burnTimestampNoteLabel = new Label
         {
             AutoSize = false,
             Dock = DockStyle.Fill,
-            TextAlign = ContentAlignment.MiddleLeft,
+            TextAlign = ContentAlignment.TopLeft,
             ForeColor = SystemColors.GrayText,
             Text = BurnTimestampMetadataBuilder.ReliabilityNote,
             Margin = new Padding(22, 0, 0, 0),
+            Padding = new Padding(0, 2, 0, 0),
             Visible = true
         };
         var burnPanel = new TableLayoutPanel
@@ -1170,11 +1176,11 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             RowCount = 2,
-            Margin = new Padding(0, 4, 0, 4)
+            Margin = new Padding(0)
         };
         burnPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        burnPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
-        burnPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        burnPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        burnPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
         burnPanel.Controls.Add(burnTimestampCheckBox, 0, 0);
         burnPanel.Controls.Add(burnTimestampNoteLabel, 0, 1);
         var fpsMessageLabel = new Label
@@ -1190,7 +1196,8 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.RightToLeft,
             WrapContents = false,
-            Margin = new Padding(0)
+            Margin = new Padding(0),
+            Padding = new Padding(0)
         };
         var applyButton = CreateButton("OK");
         var cancelDialogButton = CreateButton("Cancel");
@@ -5813,7 +5820,7 @@ public sealed class MainForm : Form
     {
         var label = CreateLabel(text);
         label.TextAlign = ContentAlignment.TopLeft;
-        label.Padding = new Padding(0, 12, 0, 0);
+        label.Padding = new Padding(0, 4, 0, 0);
         return label;
     }
 
