@@ -5,10 +5,10 @@ public sealed class MainForm : Form
     private const int DetailsExpandedHeight = 220;
     private const int DetailsFooterHeight = 54;
     private const int DefaultWindowWidth = 1080;
-    private const int DefaultWindowHeight = 820;
+    private const int DefaultWindowHeight = 860;
     private const int MinimumWindowWidth = 960;
-    private const int MinimumWindowHeight = 680;
-    private const int WindowScreenMargin = 40;
+    private const int MinimumWindowHeight = 760;
+    private const int WindowScreenMargin = 8;
     private const int ActionRowHeight = 54;
     private const int FileSelectionRowHeight = 156;
     private const int MinimumBatchOptionsRowHeight = 128;
@@ -5504,7 +5504,6 @@ public sealed class MainForm : Form
         root.Controls.Add(BuildFileSelectionPanel(), 0, 1);
         root.Controls.Add(BuildOptionsPanel(), 0, 2);
         root.Controls.Add(BuildQueueSettingsNotePanel(), 0, 3);
-        queueGridView.MinimumSize = new Size(0, GetMinimumQueueGridHeight());
         root.Controls.Add(queueGridView, 0, 4);
         root.Controls.Add(BuildQueueActionPanel(), 0, 5);
         root.Controls.Add(BuildActionPanel(), 0, 6);
