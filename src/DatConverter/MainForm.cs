@@ -683,13 +683,11 @@ public sealed class MainForm : Form
         var folderLabel = CreateLabel("Selected folder:");
         var folderTextBox = new TextBox
         {
-            Anchor = AnchorStyles.Left | AnchorStyles.Right,
             ReadOnly = true,
             Text = folderPath,
-            BackColor = SystemColors.Window,
-            Margin = new Padding(0, 4, 0, 4)
+            BackColor = SystemColors.Window
         };
-        folderTextBox.MinimumSize = new Size(0, folderTextBox.PreferredHeight);
+        ConfigureSingleLineTextBox(folderTextBox, new Padding(0, 0, 0, 0));
         var includeSubfoldersCheckBox = new CheckBox
         {
             AutoSize = false,
@@ -1090,10 +1088,9 @@ public sealed class MainForm : Form
 
         var saveAsTextBox = new TextBox
         {
-            Dock = DockStyle.Fill,
-            Text = item.PlannedOutputPath,
-            Margin = new Padding(0, 7, 8, 5)
+            Text = item.PlannedOutputPath
         };
+        ConfigureSingleLineTextBox(saveAsTextBox, new Padding(0, 0, 8, 0));
         var browseButton = CreateButton("Browse...");
         browseButton.Margin = new Padding(0, 3, 0, 3);
         var formatComboBox = CreateComboBox(new[] { "MP4", "MKV" }, item.OutputFormat.DisplayName());
@@ -5998,10 +5995,10 @@ public sealed class MainForm : Form
     {
         var comboBox = new ComboBox
         {
-            Dock = DockStyle.Fill,
             DropDownStyle = ComboBoxStyle.DropDownList,
-            Margin = new Padding(0, 6, 18, 4)
+            Margin = new Padding(0, 0, 18, 0)
         };
+        ConfigureSingleLineControl(comboBox, comboBox.PreferredHeight);
 
         comboBox.Items.AddRange(items);
         comboBox.SelectedItem = selectedItem;
@@ -6071,13 +6068,24 @@ public sealed class MainForm : Form
     {
         var textBox = new TextBox
         {
-            Anchor = AnchorStyles.Left | AnchorStyles.Right,
             ReadOnly = true,
-            Text = text,
-            Margin = new Padding(0, 0, 12, 0)
+            Text = text
         };
-        textBox.MinimumSize = new Size(0, textBox.PreferredHeight);
-        textBox.Height = textBox.PreferredHeight;
+        ConfigureSingleLineTextBox(textBox, new Padding(0, 0, 12, 0));
         return textBox;
+    }
+
+    private static void ConfigureSingleLineTextBox(TextBox textBox, Padding margin)
+    {
+        ConfigureSingleLineControl(textBox, textBox.PreferredHeight);
+        textBox.Margin = margin;
+    }
+
+    private static void ConfigureSingleLineControl(Control control, int preferredHeight)
+    {
+        control.Dock = DockStyle.None;
+        control.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        control.MinimumSize = new Size(0, preferredHeight);
+        control.Height = preferredHeight;
     }
 }
