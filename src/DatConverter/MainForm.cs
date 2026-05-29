@@ -10,6 +10,7 @@ public sealed class MainForm : Form
     private const int MinimumWindowHeight = 680;
     private const int WindowScreenMargin = 40;
     private const int ActionRowHeight = 54;
+    private const int FileSelectionRowHeight = 156;
     private const int MinimumBatchOptionsRowHeight = 128;
     private const int MinimumBatchOptionStackHeight = 78;
     private const int MinimumQueueGridHeight = 92;
@@ -329,7 +330,7 @@ public sealed class MainForm : Form
         openOutputFolderButton.TextImageRelation = TextImageRelation.Overlay;
         openOutputFolderButton.Padding = Padding.Empty;
         wordWrapButton = CreateButton("Word Wrap: Off");
-        wordWrapButton.Size = new Size(150, 42);
+        wordWrapButton.Size = new Size(190, 42);
         copyLogButton = CreateButton("Copy Log");
         clearLogButton = CreateButton("Clear Log");
 
@@ -5366,7 +5367,7 @@ public sealed class MainForm : Form
             rootLayout?.Padding.Vertical ?? 0;
 
         height += 44;
-        height += 116;
+        height += FileSelectionRowHeight;
         height += GetBatchOptionsMinimumHeight();
         height += 34;
         height += MinimumQueueGridHeight;
@@ -5482,7 +5483,7 @@ public sealed class MainForm : Form
             RowCount = 10
         };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, FileSelectionRowHeight));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -5554,7 +5555,7 @@ public sealed class MainForm : Form
             RowCount = 3,
             Padding = new Padding(0)
         };
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 124));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 33));
@@ -5584,8 +5585,10 @@ public sealed class MainForm : Form
             Margin = new Padding(0)
         };
 
-        browseFileButton.Size = new Size(148, 36);
-        addFolderButton.Size = new Size(166, 36);
+        SetButtonWidth(browseFileButton, 148);
+        SetButtonWidth(addFolderButton, 166);
+        browseFileButton.Margin = new Padding(0, 2, 8, 2);
+        addFolderButton.Margin = new Padding(0, 2, 0, 2);
         panel.Controls.Add(browseFileButton);
         panel.Controls.Add(addFolderButton);
         return panel;
@@ -5727,6 +5730,7 @@ public sealed class MainForm : Form
     {
         button.Dock = DockStyle.Fill;
         button.Margin = new Padding(6, 2, 0, 2);
+        EnsureButtonMinimumSize(button);
         panel.Controls.Add(button, column, 0);
     }
 
@@ -5758,7 +5762,7 @@ public sealed class MainForm : Form
             RowCount = 1,
             Padding = new Padding(0, 4, 0, 4)
         };
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 166));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 206));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 148));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 148));
@@ -5773,13 +5777,15 @@ public sealed class MainForm : Form
 
     private static Label CreateLabel(string text)
     {
-        return new Label
+        var label = new Label
         {
             AutoSize = false,
             Dock = DockStyle.Fill,
             Text = text,
             TextAlign = ContentAlignment.MiddleLeft
         };
+        label.MinimumSize = new Size(0, GetLabelPreferredHeight(label));
+        return label;
     }
 
     private static Control BuildOptionStack(string labelText, ComboBox comboBox, int comboWidth)
@@ -5827,6 +5833,11 @@ public sealed class MainForm : Form
         };
     }
 
+    private static int GetLabelPreferredHeight(Label label)
+    {
+        return Math.Max(22, label.GetPreferredSize(new Size(Math.Max(1, label.Width), int.MaxValue)).Height);
+    }
+
     private static void ApplyPreferredComboBoxHeight(ComboBox comboBox, int comboWidth)
     {
         var preferredHeight = Math.Max(comboBox.PreferredHeight, TextRenderer.MeasureText("Mg", comboBox.Font).Height + 8);
@@ -5856,7 +5867,7 @@ public sealed class MainForm : Form
 
     private static Button CreateButton(string text)
     {
-        return new Button
+        var button = new Button
         {
             AutoSize = false,
             Size = new Size(112, 42),
@@ -5865,6 +5876,25 @@ public sealed class MainForm : Form
             TextAlign = ContentAlignment.MiddleCenter,
             UseVisualStyleBackColor = true
         };
+        EnsureButtonMinimumSize(button);
+        return button;
+    }
+
+    private static void SetButtonWidth(Button button, int width)
+    {
+        EnsureButtonMinimumSize(button);
+        button.Size = new Size(width, button.MinimumSize.Height);
+        button.MinimumSize = new Size(Math.Min(width, button.MinimumSize.Width), button.MinimumSize.Height);
+    }
+
+    private static void EnsureButtonMinimumSize(Button button)
+    {
+        var preferredHeight = Math.Max(42, button.GetPreferredSize(Size.Empty).Height + 4);
+        button.MinimumSize = new Size(0, preferredHeight);
+        if (button.Height < preferredHeight)
+        {
+            button.Height = preferredHeight;
+        }
     }
 
     private void RegisterQueueDeselectHandlers(Control control)
@@ -5996,12 +6026,14 @@ public sealed class MainForm : Form
 
     private static TextBox CreateReadOnlyTextBox(string text)
     {
-        return new TextBox
+        var textBox = new TextBox
         {
             Dock = DockStyle.Fill,
             ReadOnly = true,
             Text = text,
             Margin = new Padding(0, 6, 12, 4)
         };
+        textBox.MinimumSize = new Size(0, textBox.PreferredHeight);
+        return textBox;
     }
 }
