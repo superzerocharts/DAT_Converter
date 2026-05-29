@@ -14,5 +14,5 @@ public sealed class AppSettings
 
     public int WindowWidth { get; set; } = 1080;
 
-    public int WindowHeight { get; set; } = 860;
+    public int WindowHeight { get; set; } = 920;
 }
