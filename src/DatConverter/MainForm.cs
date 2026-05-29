@@ -10,6 +10,8 @@ public sealed class MainForm : Form
     private const int MinimumWindowHeight = 680;
     private const int WindowScreenMargin = 40;
     private const int ActionRowHeight = 54;
+    private const int BatchOptionsRowHeight = 128;
+    private const int BatchOptionStackHeight = 78;
     private const int QueueStatusColumnWidth = 108;
     private const int QueueFileColumnWidth = 202;
     private const int QueueOutputColumnWidth = 278;
@@ -5338,7 +5340,7 @@ public sealed class MainForm : Form
         };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 112));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, BatchOptionsRowHeight));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, ActionRowHeight));
@@ -5467,7 +5469,7 @@ public sealed class MainForm : Form
         {
             Dock = DockStyle.Fill,
             Text = "Batch Options",
-            Padding = new Padding(14, 16, 14, 10)
+            Padding = new Padding(14, 18, 14, 12)
         };
 
         var panel = new FlowLayoutPanel
@@ -5475,7 +5477,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
-            Padding = new Padding(6, 0, 0, 0)
+            Padding = new Padding(6, 2, 0, 0)
         };
 
         panel.Controls.Add(BuildOptionStack("Format", outputFormatComboBox, 190));
@@ -5634,25 +5636,30 @@ public sealed class MainForm : Form
 
     private static Control BuildOptionStack(string labelText, ComboBox comboBox, int comboWidth)
     {
-        var panel = new Panel
+        var panel = new TableLayoutPanel
         {
             Width = comboWidth,
-            Height = 70,
-            Margin = new Padding(0, 0, 70, 0)
+            Height = BatchOptionStackHeight,
+            ColumnCount = 1,
+            RowCount = 2,
+            Margin = new Padding(0, 0, 70, 0),
+            Padding = new Padding(0)
         };
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
 
         var label = CreateOptionLabel(labelText);
-        label.Location = new Point(0, 0);
-        label.Size = new Size(comboWidth, 22);
+        label.Dock = DockStyle.Fill;
+        label.Margin = new Padding(0);
 
-        comboBox.Dock = DockStyle.None;
-        comboBox.Location = new Point(0, 28);
+        comboBox.Dock = DockStyle.Fill;
         comboBox.Size = new Size(comboWidth, 30);
         comboBox.MinimumSize = new Size(comboWidth, 30);
-        comboBox.Margin = new Padding(0);
+        comboBox.Margin = new Padding(0, 2, 0, 2);
 
-        panel.Controls.Add(label);
-        panel.Controls.Add(comboBox);
+        panel.Controls.Add(label, 0, 0);
+        panel.Controls.Add(comboBox, 0, 1);
         return panel;
     }
 
