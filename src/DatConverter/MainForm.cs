@@ -5674,7 +5674,7 @@ public sealed class MainForm : Form
         {
             AutoSize = false,
             Dock = DockStyle.Fill,
-            Text = "Double-click a row to change filename or save location.",
+            Text = "Double-click a row to change settings.",
             TextAlign = ContentAlignment.MiddleLeft,
             ForeColor = SystemColors.GrayText,
             Margin = new Padding(2, 2, 0, 2)
