@@ -31,6 +31,28 @@ public sealed class BurnTimestampMetadataBuilderTests
     }
 
     [Fact]
+    public void Build_WithSplitCameraDisplayName_FfmpegDrawtextUsesCameraDisplayName()
+    {
+        var item = CreateSplitItem("8379 Marquee Northeast PTZ");
+        item.BurnTimestamp = true;
+        var timeline = RecordingTimelineBuilder.Build(item);
+
+        var burnTimestamp = BurnTimestampMetadataBuilder.Build(item, timeline);
+        var arguments = FfmpegCommandBuilder.BuildTrimEncodeArguments(
+            @"C:\video\combined.h264",
+            item.PlannedOutputPath,
+            item.OutputFormat,
+            item.Fps,
+            TimeSpan.Zero,
+            timeline.TotalDuration!.Value,
+            burnTimestamp: burnTimestamp);
+        var filter = GetOptionValue(arguments, "-vf");
+
+        Assert.Contains("8379 Marquee Northeast PTZ", filter);
+        Assert.DoesNotContain("Cam 8379 - 4 hr clip", filter);
+    }
+
+    [Fact]
     public void Build_RuntimeOnlyTimelineReturnsNull()
     {
         var item = new QueueItem(
@@ -103,5 +125,12 @@ public sealed class BurnTimestampMetadataBuilderTests
                 ]
             }
         };
+    }
+
+    private static string GetOptionValue(IReadOnlyList<string> arguments, string option)
+    {
+        var index = arguments.ToList().IndexOf(option);
+        Assert.True(index >= 0 && index < arguments.Count - 1, $"Missing option value for {option}.");
+        return arguments[index + 1];
     }
 }

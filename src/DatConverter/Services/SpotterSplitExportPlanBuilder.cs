@@ -373,7 +373,7 @@ public sealed class SpotterSplitExportPlanBuilder
     {
         foreach (var element in document.Descendants())
         {
-            if (!IsCameraNameCandidateElement(element.Name.LocalName))
+            if (!IsCameraNameCandidateElement(element))
             {
                 continue;
             }
@@ -388,12 +388,24 @@ public sealed class SpotterSplitExportPlanBuilder
         return null;
     }
 
-    private static bool IsCameraNameCandidateElement(string localName)
+    private static bool IsCameraNameCandidateElement(XElement element)
     {
+        var localName = element.Name.LocalName;
+        if (string.Equals(localName, "channel", StringComparison.OrdinalIgnoreCase))
+        {
+            return HasAttributeValue(element, "dataType", "Video") &&
+                HasAttributeValue(element, "channelType", "Material");
+        }
+
         return string.Equals(localName, "video", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(localName, "material", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(localName, "videoChannel", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(localName, "materialChannel", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasAttributeValue(XElement element, string attributeName, string expectedValue)
+    {
+        return string.Equals((string?)element.Attribute(attributeName), expectedValue, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? DecodeCameraDisplayName(string? value)

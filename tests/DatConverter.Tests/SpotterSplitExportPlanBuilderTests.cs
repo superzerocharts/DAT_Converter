@@ -204,6 +204,7 @@ public sealed class SpotterSplitExportPlanBuilderTests
         Assert.Equal("Strong", plan.Confidence);
         Assert.Equal(4, plan.SegmentCount);
         Assert.Equal(2, plan.SelectedSegmentNumber);
+        Assert.Equal("8379 Marquee Northeast PTZ", plan.CameraDisplayName);
         Assert.Equal(
             new[]
             {
@@ -254,9 +255,9 @@ public sealed class SpotterSplitExportPlanBuilderTests
             path,
             $"""
             <archive2>
-              <video>
-                <material name="{cameraDisplayNameBase64}" />
-              </video>
+              <channels>
+                <channel dataType="Video" channelType="Material" name="{cameraDisplayNameBase64}" manufacturer="AXIS" model="AXIS Q6135-LE" />
+              </channels>
               <files>
             {fileLines}
               </files>
