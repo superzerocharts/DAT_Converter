@@ -5,12 +5,12 @@ public sealed class MainForm : Form
     private const int DetailsExpandedHeight = 220;
     private const int DetailsFooterHeight = 62;
     private const int DefaultWindowWidth = 1080;
-    private const int DefaultWindowHeight = 920;
+    private const int DefaultWindowHeight = 980;
     private const int MinimumWindowWidth = 960;
-    private const int MinimumWindowHeight = 820;
+    private const int MinimumWindowHeight = 880;
     private const int WindowScreenMargin = 8;
-    private const int ActionRowHeight = 58;
-    private const int FileSelectionRowHeight = 156;
+    private const int ActionRowHeight = 66;
+    private const int FileSelectionRowHeight = 180;
     private const int MinimumBatchOptionsRowHeight = 128;
     private const int MinimumBatchOptionStackHeight = 78;
     private const int MinimumQueueVisibleRows = 4;
@@ -253,9 +253,9 @@ public sealed class MainForm : Form
         isInitializing = true;
         selectedFilePathTextBox = CreateReadOnlyTextBox("No .dat file selected");
         browseFileButton = CreateButton("Add Files...");
-        browseFileButton.Size = new Size(148, 42);
+        browseFileButton.Size = new Size(148, 48);
         addFolderButton = CreateButton("Add Folder...");
-        addFolderButton.Size = new Size(166, 42);
+        addFolderButton.Size = new Size(166, 48);
         queueGridView = CreateQueueGridView();
         startQueueButton = CreateButton("Start Queue");
         startQueueButton.Size = new Size(160, 42);
@@ -1065,7 +1065,7 @@ public sealed class MainForm : Form
             MinimizeBox = false,
             MaximizeBox = false,
             ShowInTaskbar = false,
-            ClientSize = new Size(820, 512),
+            ClientSize = new Size(860, 528),
             Font = Font
         };
 
@@ -1076,15 +1076,15 @@ public sealed class MainForm : Form
             ColumnCount = 3,
             RowCount = 8
         };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 122));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
 
@@ -1426,10 +1426,10 @@ public sealed class MainForm : Form
         root.Controls.Add(CreateLabel("Source FPS:"), 0, 3);
         root.Controls.Add(fpsComboBox, 1, 3);
         root.SetColumnSpan(fpsComboBox, 2);
-        root.Controls.Add(CreateLabel("Trim Video:"), 0, 4);
+        root.Controls.Add(CreateEditorSectionLabel("Trim Video:"), 0, 4);
         root.Controls.Add(trimPanel, 1, 4);
         root.SetColumnSpan(trimPanel, 2);
-        root.Controls.Add(CreateLabel("Timestamp:"), 0, 5);
+        root.Controls.Add(CreateEditorSectionLabel("Timestamp:"), 0, 5);
         root.Controls.Add(burnPanel, 1, 5);
         root.SetColumnSpan(burnPanel, 2);
         root.Controls.Add(fpsMessageLabel, 1, 6);
@@ -5376,8 +5376,8 @@ public sealed class MainForm : Form
         height += GetMinimumQueueGridHeight();
         height += ActionRowHeight;
         height += ActionRowHeight;
-        height += Math.Max(34, conversionProgressBar.PreferredSize.Height + conversionProgressBar.Margin.Vertical);
-        height += Math.Max(34, currentStatusLabel.PreferredHeight);
+        height += Math.Max(42, conversionProgressBar.PreferredSize.Height + conversionProgressBar.Margin.Vertical);
+        height += Math.Max(40, currentStatusLabel.PreferredHeight);
 
         return new Size(width, height);
     }
@@ -5508,8 +5508,8 @@ public sealed class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, ActionRowHeight));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, ActionRowHeight));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
         detailsRowStyle = new RowStyle(SizeType.Absolute, 0);
         root.RowStyles.Add(detailsRowStyle);
         rootLayout = root;
@@ -5577,9 +5577,9 @@ public sealed class MainForm : Form
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340));
-        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 33));
-        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 33));
-        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 34));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
 
         panel.Controls.Add(CreateLabel("DAT file:"), 0, 0);
         panel.Controls.Add(selectedFilePathTextBox, 1, 0);
@@ -5606,8 +5606,8 @@ public sealed class MainForm : Form
 
         SetButtonWidth(browseFileButton, 148);
         SetButtonWidth(addFolderButton, 166);
-        browseFileButton.Margin = new Padding(0, 2, 8, 2);
-        addFolderButton.Margin = new Padding(0, 2, 0, 2);
+        browseFileButton.Margin = new Padding(0, 4, 8, 4);
+        addFolderButton.Margin = new Padding(0, 4, 0, 4);
         panel.Controls.Add(browseFileButton);
         panel.Controls.Add(addFolderButton);
         return panel;
@@ -5806,6 +5806,14 @@ public sealed class MainForm : Form
             TextAlign = ContentAlignment.MiddleLeft
         };
         label.MinimumSize = new Size(0, GetLabelPreferredHeight(label));
+        return label;
+    }
+
+    private static Label CreateEditorSectionLabel(string text)
+    {
+        var label = CreateLabel(text);
+        label.TextAlign = ContentAlignment.TopLeft;
+        label.Padding = new Padding(0, 12, 0, 0);
         return label;
     }
 

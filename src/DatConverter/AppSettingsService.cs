@@ -107,9 +107,9 @@ public sealed class AppSettingsService
             settings.WindowWidth = 960;
         }
 
-        if (settings.WindowHeight < 820)
+        if (settings.WindowHeight < 880)
         {
-            settings.WindowHeight = 820;
+            settings.WindowHeight = 880;
         }
 
         return settings;
