@@ -78,6 +78,7 @@ public sealed class MainForm : Form
     private bool cancelCurrentOnlyRequested;
     private bool cancelQueueRequested;
     private bool areDetailsVisible;
+    private Size? detailsCollapsedClientSize;
     private TableLayoutPanel? rootLayout;
     private RowStyle? detailsRowStyle;
     private Control? detailsPanel;
@@ -4457,6 +4458,7 @@ public sealed class MainForm : Form
         {
             if (visible)
             {
+                detailsCollapsedClientSize = ClientSize;
                 var detailsHeight = GetDetailsExpansionHeight();
                 if (detailsRowStyle is not null)
                 {
@@ -4478,6 +4480,7 @@ public sealed class MainForm : Form
             else
             {
                 var detailsHeight = GetCurrentDetailsRowHeight();
+                var collapsedClientSize = detailsCollapsedClientSize ?? new Size(ClientSize.Width, ClientSize.Height - detailsHeight);
                 areDetailsVisible = false;
                 showDetailsButton.Text = "Show Details";
 
@@ -4492,7 +4495,10 @@ public sealed class MainForm : Form
                     detailsRowStyle.Height = 0;
                 }
 
-                ClientSize = new Size(ClientSize.Width, Math.Max(MinimumWindowHeight, ClientSize.Height - detailsHeight));
+                ClientSize = new Size(
+                    ClientSize.Width,
+                    Math.Max(GetMinimumUsableClientSize().Height, collapsedClientSize.Height));
+                detailsCollapsedClientSize = null;
             }
         }
         finally
@@ -5334,9 +5340,14 @@ public sealed class MainForm : Form
     private void ApplyMinimumUsableWindowSize()
     {
         var minimumClientSize = GetMinimumUsableClientSize();
+        var frameWidth = Math.Max(0, Width - ClientSize.Width);
+        var frameHeight = Math.Max(0, Height - ClientSize.Height);
+        minimumClientSize = new Size(
+            Math.Min(minimumClientSize.Width, Math.Max(0, DefaultWindowWidth - frameWidth)),
+            Math.Min(minimumClientSize.Height, Math.Max(0, DefaultWindowHeight - frameHeight)));
         var minimumWindowSize = SizeFromClientSize(minimumClientSize);
-        minimumWindowSize.Width = Math.Max(MinimumWindowWidth, minimumWindowSize.Width);
-        minimumWindowSize.Height = Math.Max(MinimumWindowHeight, minimumWindowSize.Height);
+        minimumWindowSize.Width = Math.Min(DefaultWindowWidth, Math.Max(MinimumWindowWidth, minimumWindowSize.Width));
+        minimumWindowSize.Height = Math.Min(DefaultWindowHeight, Math.Max(MinimumWindowHeight, minimumWindowSize.Height));
         MinimumSize = minimumWindowSize;
 
         if (WindowState == FormWindowState.Normal &&
@@ -5466,7 +5477,6 @@ public sealed class MainForm : Form
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            AutoScroll = true,
             Padding = new Padding(12),
             ColumnCount = 1,
             RowCount = 10
