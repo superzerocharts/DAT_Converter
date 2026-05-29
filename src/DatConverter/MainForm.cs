@@ -274,14 +274,14 @@ public sealed class MainForm : Form
             AutoSize = true,
             Text = "Same folder as source file",
             Checked = selectionState.OutputDestinationMode == OutputDestinationMode.SameFolderAsSource,
-            Margin = new Padding(0, 6, 18, 4)
+            Margin = new Padding(0, 14, 18, 0)
         };
         chooseFolderRadioButton = new RadioButton
         {
             AutoSize = true,
             Text = "Choose output folder",
             Checked = selectionState.OutputDestinationMode == OutputDestinationMode.ChooseOutputFolder,
-            Margin = new Padding(0, 6, 0, 4)
+            Margin = new Padding(0, 14, 0, 0)
         };
         outputFolderTextBox = CreateReadOnlyTextBox(string.IsNullOrWhiteSpace(selectionState.ChosenOutputFolderPath) ? "No output folder selected" : selectionState.ChosenOutputFolderPath);
         browseOutputFolderButton = CreateButton("Browse...");
@@ -1065,7 +1065,7 @@ public sealed class MainForm : Form
             MinimizeBox = false,
             MaximizeBox = false,
             ShowInTaskbar = false,
-            ClientSize = new Size(860, 500),
+            ClientSize = new Size(860, 462),
             Font = Font
         };
 
@@ -1083,10 +1083,10 @@ public sealed class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 66));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 62));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
 
         var saveAsTextBox = new TextBox
         {
@@ -1131,7 +1131,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Right,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
-            Margin = new Padding(0)
+            Margin = new Padding(0, 0, 0, 6)
         };
         trimButtonPanel.Controls.Add(trimButton);
         trimButtonPanel.Controls.Add(clearTrimButton);
@@ -1140,7 +1140,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 2,
             RowCount = 2,
-            Margin = new Padding(0)
+            Margin = new Padding(0, 0, 0, 6)
         };
         trimPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         trimPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
