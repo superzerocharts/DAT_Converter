@@ -10,8 +10,8 @@ public sealed class MainForm : Form
     private const int MinimumWindowHeight = 680;
     private const int WindowScreenMargin = 40;
     private const int ActionRowHeight = 54;
-    private const int BatchOptionsRowHeight = 128;
-    private const int BatchOptionStackHeight = 78;
+    private const int MinimumBatchOptionsRowHeight = 128;
+    private const int MinimumBatchOptionStackHeight = 78;
     private const int QueueStatusColumnWidth = 108;
     private const int QueueFileColumnWidth = 202;
     private const int QueueOutputColumnWidth = 278;
@@ -237,6 +237,7 @@ public sealed class MainForm : Form
         }
 
         StartPosition = FormStartPosition.CenterScreen;
+        AutoScaleMode = AutoScaleMode.Dpi;
         MinimumSize = new Size(MinimumWindowWidth, MinimumWindowHeight);
         Size = GetClampedStartupWindowSize(
             new Size(appSettings.WindowWidth, appSettings.WindowHeight),
@@ -3180,15 +3181,15 @@ public sealed class MainForm : Form
             availableWidth -= SystemInformation.VerticalScrollBarWidth;
         }
 
-        const int minimumFileWidth = 150;
-        const int minimumOutputWidth = 220;
-        var fixedWidth =
-            QueueStatusColumnWidth +
-            QueueFormatColumnWidth +
-            QueueModeColumnWidth +
-            QueueFpsColumnWidth +
-            QueueResolutionColumnWidth +
-            QueueProgressColumnWidth;
+        var minimumFileWidth = GetQueueColumnPreferredWidth("File", 110);
+        var minimumOutputWidth = GetQueueColumnPreferredWidth("Output", 150);
+        var statusWidth = GetQueueColumnPreferredWidth("Status", QueueStatusColumnWidth);
+        var formatWidth = GetQueueColumnPreferredWidth("Format", QueueFormatColumnWidth);
+        var modeWidth = GetQueueColumnPreferredWidth("Mode", QueueModeColumnWidth);
+        var fpsWidth = GetQueueColumnPreferredWidth("Fps", QueueFpsColumnWidth);
+        var resolutionWidth = GetQueueColumnPreferredWidth("Resolution", QueueResolutionColumnWidth);
+        var progressWidth = GetQueueColumnPreferredWidth("Progress", QueueProgressColumnWidth);
+        var fixedWidth = statusWidth + formatWidth + modeWidth + fpsWidth + resolutionWidth + progressWidth;
         var flexibleWidth = Math.Max(minimumFileWidth + minimumOutputWidth, availableWidth - fixedWidth);
         var extraFlexibleWidth = Math.Max(0, flexibleWidth - QueueFileColumnWidth - QueueOutputColumnWidth);
         var fileWidth = Math.Max(minimumFileWidth, QueueFileColumnWidth + (int)Math.Round(extraFlexibleWidth * 0.4D));
@@ -3197,14 +3198,14 @@ public sealed class MainForm : Form
         isApplyingQueueColumnWidths = true;
         try
         {
-            SetQueueColumnWidth("Status", QueueStatusColumnWidth);
+            SetQueueColumnWidth("Status", statusWidth);
             SetQueueColumnWidth("File", fileWidth);
             SetQueueColumnWidth("Output", outputWidth);
-            SetQueueColumnWidth("Format", QueueFormatColumnWidth);
-            SetQueueColumnWidth("Mode", QueueModeColumnWidth);
-            SetQueueColumnWidth("Fps", QueueFpsColumnWidth);
-            SetQueueColumnWidth("Resolution", QueueResolutionColumnWidth);
-            SetQueueColumnWidth("Progress", QueueProgressColumnWidth);
+            SetQueueColumnWidth("Format", formatWidth);
+            SetQueueColumnWidth("Mode", modeWidth);
+            SetQueueColumnWidth("Fps", fpsWidth);
+            SetQueueColumnWidth("Resolution", resolutionWidth);
+            SetQueueColumnWidth("Progress", progressWidth);
         }
         finally
         {
@@ -3216,8 +3217,21 @@ public sealed class MainForm : Form
     {
         if (queueGridView.Columns[columnName] is { } column)
         {
+            column.MinimumWidth = Math.Max(column.MinimumWidth, Math.Min(width, 70));
             column.Width = width;
         }
+    }
+
+    private int GetQueueColumnPreferredWidth(string columnName, int fallbackWidth)
+    {
+        if (queueGridView.Columns[columnName] is not { } column)
+        {
+            return fallbackWidth;
+        }
+
+        var font = queueGridView.ColumnHeadersDefaultCellStyle.Font ?? queueGridView.Font;
+        var headerWidth = TextRenderer.MeasureText(column.HeaderText, font).Width + 18;
+        return Math.Max(fallbackWidth, headerWidth);
     }
 
     private void UpdateQueueButtonState()
@@ -5340,7 +5354,7 @@ public sealed class MainForm : Form
         };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 116));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, BatchOptionsRowHeight));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, ActionRowHeight));
@@ -5467,6 +5481,8 @@ public sealed class MainForm : Form
     {
         var groupBox = new GroupBox
         {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             Dock = DockStyle.Fill,
             Text = "Batch Options",
             Padding = new Padding(14, 18, 14, 12)
@@ -5474,6 +5490,8 @@ public sealed class MainForm : Form
 
         var panel = new FlowLayoutPanel
         {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
@@ -5485,6 +5503,7 @@ public sealed class MainForm : Form
         panel.Controls.Add(BuildOptionStack("Source FPS", frameRateComboBox, 190));
 
         groupBox.Controls.Add(panel);
+        groupBox.MinimumSize = new Size(0, GetMinimumBatchOptionsHeight(groupBox, panel));
         return groupBox;
     }
 
@@ -5638,28 +5657,32 @@ public sealed class MainForm : Form
     {
         var panel = new TableLayoutPanel
         {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             Width = comboWidth,
-            Height = BatchOptionStackHeight,
             ColumnCount = 1,
             RowCount = 2,
             Margin = new Padding(0, 0, 70, 0),
             Padding = new Padding(0)
         };
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
-        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         var label = CreateOptionLabel(labelText);
-        label.Dock = DockStyle.Fill;
-        label.Margin = new Padding(0);
+        var labelHeight = Math.Max(label.GetPreferredSize(new Size(comboWidth, int.MaxValue)).Height, 22);
+        label.AutoSize = true;
+        label.Dock = DockStyle.Top;
+        label.MinimumSize = new Size(comboWidth, labelHeight);
+        label.Margin = new Padding(0, 0, 0, 4);
 
-        comboBox.Dock = DockStyle.Fill;
-        comboBox.Size = new Size(comboWidth, 30);
-        comboBox.MinimumSize = new Size(comboWidth, 30);
+        ApplyPreferredComboBoxHeight(comboBox, comboWidth);
+        comboBox.Dock = DockStyle.Top;
         comboBox.Margin = new Padding(0, 2, 0, 2);
 
         panel.Controls.Add(label, 0, 0);
         panel.Controls.Add(comboBox, 0, 1);
+        panel.MinimumSize = new Size(comboWidth, GetMinimumBatchOptionStackHeight(label, comboBox));
         return panel;
     }
 
@@ -5673,6 +5696,33 @@ public sealed class MainForm : Form
             Text = text,
             TextAlign = ContentAlignment.MiddleLeft
         };
+    }
+
+    private static void ApplyPreferredComboBoxHeight(ComboBox comboBox, int comboWidth)
+    {
+        var preferredHeight = Math.Max(comboBox.PreferredHeight, TextRenderer.MeasureText("Mg", comboBox.Font).Height + 8);
+        comboBox.Size = new Size(comboWidth, preferredHeight);
+        comboBox.MinimumSize = new Size(comboWidth, preferredHeight);
+    }
+
+    private static int GetMinimumBatchOptionStackHeight(Label label, ComboBox comboBox)
+    {
+        return Math.Max(
+            MinimumBatchOptionStackHeight,
+            label.MinimumSize.Height + label.Margin.Vertical + comboBox.MinimumSize.Height + comboBox.Margin.Vertical);
+    }
+
+    private static int GetMinimumBatchOptionsHeight(GroupBox groupBox, FlowLayoutPanel panel)
+    {
+        var tallestStack = panel.Controls
+            .Cast<Control>()
+            .Select(control => control.MinimumSize.Height + control.Margin.Vertical)
+            .DefaultIfEmpty(MinimumBatchOptionStackHeight)
+            .Max();
+
+        return Math.Max(
+            MinimumBatchOptionsRowHeight,
+            groupBox.Padding.Vertical + panel.Padding.Vertical + tallestStack + SystemInformation.BorderSize.Height);
     }
 
     private static Button CreateButton(string text)
@@ -5710,6 +5760,8 @@ public sealed class MainForm : Form
     private void ConfigureConversionModeComboBox(ComboBox comboBox)
     {
         comboBox.DrawMode = DrawMode.OwnerDrawFixed;
+        comboBox.ItemHeight = Math.Max(comboBox.ItemHeight, TextRenderer.MeasureText("Full NVENC", comboBox.Font).Height + 4);
+        ApplyPreferredComboBoxHeight(comboBox, comboBox.Width > 0 ? comboBox.Width : comboBox.MinimumSize.Width);
         comboBox.DrawItem += (_, e) =>
         {
             e.DrawBackground();
