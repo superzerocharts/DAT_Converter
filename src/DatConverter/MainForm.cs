@@ -3,7 +3,7 @@ namespace DatConverter;
 public sealed class MainForm : Form
 {
     private const int DetailsExpandedHeight = 220;
-    private const int DetailsFooterHeight = 54;
+    private const int DetailsFooterHeight = 62;
     private const int DefaultWindowWidth = 1080;
     private const int DefaultWindowHeight = 920;
     private const int MinimumWindowWidth = 960;
@@ -295,6 +295,7 @@ public sealed class MainForm : Form
         conversionProgressBar = new ProgressBar
         {
             Dock = DockStyle.Fill,
+            Margin = new Padding(0, 6, 0, 0),
             Minimum = 0,
             Maximum = 100,
             Value = 0
@@ -663,7 +664,7 @@ public sealed class MainForm : Form
             MinimizeBox = false,
             MaximizeBox = false,
             ShowInTaskbar = false,
-            ClientSize = new Size(760, 360),
+            ClientSize = new Size(760, 376),
             Font = Font
         };
 
@@ -674,20 +675,21 @@ public sealed class MainForm : Form
             ColumnCount = 1,
             RowCount = 4
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 128));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 80));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 84));
 
         var folderLabel = CreateLabel("Selected folder:");
         var folderTextBox = new TextBox
         {
-            Dock = DockStyle.Fill,
+            Anchor = AnchorStyles.Left | AnchorStyles.Right,
             ReadOnly = true,
             Text = folderPath,
             BackColor = SystemColors.Window,
             Margin = new Padding(0, 6, 0, 6)
         };
+        folderTextBox.MinimumSize = new Size(0, folderTextBox.PreferredHeight);
         var includeSubfoldersCheckBox = new CheckBox
         {
             AutoSize = false,
@@ -835,7 +837,7 @@ public sealed class MainForm : Form
             MaximizeBox = false,
             MinimizeBox = false,
             ShowInTaskbar = false,
-            ClientSize = new Size(620, content.ShowsCombineQuestion ? 290 : 190),
+            ClientSize = new Size(620, content.ShowsCombineQuestion ? 314 : 214),
             Font = Font
         };
 
@@ -847,7 +849,7 @@ public sealed class MainForm : Form
             Padding = new Padding(18)
         };
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
 
         var summary = new Label
         {
@@ -865,11 +867,11 @@ public sealed class MainForm : Form
             Padding = new Padding(0, 10, 0, 0)
         };
         var cancelButton = CreateButton("Cancel");
-        cancelButton.Size = new Size(100, 36);
+        cancelButton.Size = new Size(100, 42);
         var noButton = CreateButton("No");
-        noButton.Size = new Size(100, 36);
+        noButton.Size = new Size(100, 42);
         var yesButton = CreateButton("Yes");
-        yesButton.Size = new Size(100, 36);
+        yesButton.Size = new Size(100, 42);
         var choice = FolderImportReviewChoice.Cancel;
         cancelButton.Click += (_, _) =>
         {
@@ -912,7 +914,7 @@ public sealed class MainForm : Form
             MaximizeBox = false,
             MinimizeBox = false,
             ShowInTaskbar = false,
-            ClientSize = new Size(560, isQueueProcessing ? 300 : 240),
+            ClientSize = new Size(560, isQueueProcessing ? 318 : 258),
             Font = Font
         };
 
@@ -926,9 +928,9 @@ public sealed class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         if (isQueueProcessing)
         {
-            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
         }
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 1));
 
         var summaryLabel = new Label
@@ -1063,7 +1065,7 @@ public sealed class MainForm : Form
             MinimizeBox = false,
             MaximizeBox = false,
             ShowInTaskbar = false,
-            ClientSize = new Size(820, 480),
+            ClientSize = new Size(820, 512),
             Font = Font
         };
 
@@ -1074,15 +1076,15 @@ public sealed class MainForm : Form
             ColumnCount = 3,
             RowCount = 8
         };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 122));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 64));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
 
@@ -1116,16 +1118,16 @@ public sealed class MainForm : Form
             Margin = new Padding(0, 0, 8, 0)
         };
         var trimButton = CreateButton("Trim Video");
-        trimButton.Size = new Size(118, 36);
+        trimButton.Size = new Size(118, 42);
         var clearTrimButton = CreateButton("Clear Trim");
-        clearTrimButton.Size = new Size(112, 36);
+        clearTrimButton.Size = new Size(112, 42);
         var trimButtonPanel = new FlowLayoutPanel
         {
             AutoSize = true,
             Dock = DockStyle.Right,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
-            Margin = new Padding(0, 6, 0, 0)
+            Margin = new Padding(0)
         };
         trimButtonPanel.Controls.Add(trimButton);
         trimButtonPanel.Controls.Add(clearTrimButton);
@@ -1134,11 +1136,11 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 2,
             RowCount = 2,
-            Margin = new Padding(0, 2, 0, 2)
+            Margin = new Padding(0, 4, 0, 4)
         };
         trimPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         trimPanel.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        trimPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        trimPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
         trimPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
         trimPanel.Controls.Add(trimStateLabel, 0, 0);
         trimPanel.Controls.Add(trimModeNoteLabel, 0, 1);
@@ -1151,7 +1153,7 @@ public sealed class MainForm : Form
             Text = "Burn timestamp into video",
             Checked = item.BurnTimestamp,
             TextAlign = ContentAlignment.MiddleLeft,
-            Margin = new Padding(0, 2, 0, 0)
+            Margin = new Padding(0)
         };
         var burnTimestampNoteLabel = new Label
         {
@@ -1168,10 +1170,10 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 1,
             RowCount = 2,
-            Margin = new Padding(0)
+            Margin = new Padding(0, 4, 0, 4)
         };
         burnPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        burnPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        burnPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 32));
         burnPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
         burnPanel.Controls.Add(burnTimestampCheckBox, 0, 0);
         burnPanel.Controls.Add(burnTimestampNoteLabel, 0, 1);
@@ -5374,7 +5376,7 @@ public sealed class MainForm : Form
         height += GetMinimumQueueGridHeight();
         height += ActionRowHeight;
         height += ActionRowHeight;
-        height += Math.Max(28, conversionProgressBar.PreferredSize.Height);
+        height += Math.Max(34, conversionProgressBar.PreferredSize.Height + conversionProgressBar.Margin.Vertical);
         height += Math.Max(34, currentStatusLabel.PreferredHeight);
 
         return new Size(width, height);
@@ -5506,7 +5508,7 @@ public sealed class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, ActionRowHeight));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, ActionRowHeight));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         detailsRowStyle = new RowStyle(SizeType.Absolute, 0);
         root.RowStyles.Add(detailsRowStyle);
