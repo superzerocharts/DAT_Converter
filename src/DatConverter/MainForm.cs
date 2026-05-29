@@ -421,7 +421,7 @@ public sealed class MainForm : Form
         technicalLog.Append($"Application base directory: {ffmpegTools.ApplicationBaseDirectory}");
         technicalLog.Append($"Checked ffmpeg path: {ffmpegTools.FfmpegPath} ({FormatFoundStatus(ffmpegTools.FfmpegExists)})");
         technicalLog.Append($"Checked ffprobe path: {ffmpegTools.FfprobePath} ({FormatFoundStatus(ffmpegTools.FfprobeExists)})");
-        technicalLog.Append($"NVENC capability: {(nvencCapability.IsAvailable ? "available" : "unavailable")}. {nvencCapability.DiagnosticSummary}");
+        technicalLog.Append(FormatNvencCapabilityLogMessage(nvencCapability));
     }
 
     private void ApplyStartupToolValidation()
@@ -4629,14 +4629,19 @@ public sealed class MainForm : Form
 
         var lines = new List<string>
         {
-            $"Status: {(isQueueProcessing ? "Running" : lastQueueRunStatus)}",
-            $"Completed: {completed}",
-            $"Failed: {failed}",
-            $"Exists: {exists}",
-            $"Canceled: {canceled}",
-            $"Total queued: {queueItems.Count}",
-            $"Settings: {settings}"
+            $"Status: {(isQueueProcessing ? "Running" : lastQueueRunStatus)}"
         };
+
+        if (queueItems.Count > 0 || lastQueueRunSettings is not null || !string.Equals(lastQueueRunStatus, "Not run", StringComparison.Ordinal))
+        {
+            lines.Add($"Completed: {completed}");
+            lines.Add($"Failed: {failed}");
+            lines.Add($"Exists: {exists}");
+            lines.Add($"Canceled: {canceled}");
+        }
+
+        lines.Add($"Total queued: {queueItems.Count}");
+        lines.Add($"Settings: {settings}");
 
         if (!ffmpegTools.AreAvailable)
         {
@@ -4645,6 +4650,13 @@ public sealed class MainForm : Form
         }
 
         return lines;
+    }
+
+    private static string FormatNvencCapabilityLogMessage(NvencCapabilityResult capability)
+    {
+        return capability.IsAvailable
+            ? $"Optional hardware encoding: available. {capability.DiagnosticSummary}"
+            : $"Optional hardware encoding: unavailable. CPU encoding remains available. {capability.DiagnosticSummary}";
     }
 
     private List<string> BuildSelectedItemLines(QueueItem? item)

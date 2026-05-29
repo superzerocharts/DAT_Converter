@@ -30,12 +30,11 @@ public sealed class SelectedItemDetailsFormatterTests
     ];
 
     [Fact]
-    public void BuildLines_NoSelectedItem_UsesFixedFieldOrderWithBlankValues()
+    public void BuildLines_NoSelectedItem_ShowsIntentionalEmptyState()
     {
         var lines = SelectedItemDetailsFormatter.BuildLines(null);
 
-        Assert.Equal(ExpectedLabels, ExtractLabels(lines));
-        Assert.All(lines, line => Assert.EndsWith(":", line));
+        Assert.Equal(["No item selected."], lines);
     }
 
     [Fact]

@@ -6,7 +6,7 @@ public static class SelectedItemDetailsFormatter
     {
         if (item is null)
         {
-            return BuildBlankLines();
+            return ["No item selected."];
         }
 
         var duration = ParseProbeDuration(item.PreProbeResult?.Duration);
@@ -37,36 +37,6 @@ public static class SelectedItemDetailsFormatter
             FormatField("Exit code", FormatOptionalExitCode(result?.ExitCode)),
             FormatField("Canceled", FormatYesNo(result?.WasCanceled == true)),
             FormatField("Timed out", FormatYesNo(result?.TimedOut == true))
-        };
-    }
-
-    private static List<string> BuildBlankLines()
-    {
-        return new List<string>
-        {
-            "Input file:",
-            "Planned output file:",
-            "Output format:",
-            "Mode:",
-            "Selected source FPS:",
-            "FFmpeg FPS value:",
-            "FPS confidence:",
-            "FPS note:",
-            "Source type:",
-            "Parts:",
-            "Export segment:",
-            "Split recording segments:",
-            "Trim:",
-            "Probe status:",
-            "Conversion status:",
-            "Duration available:",
-            "Duration value:",
-            "Progress mode:",
-            "Status:",
-            "Output:",
-            "Exit code:",
-            "Canceled:",
-            "Timed out:"
         };
     }
 
