@@ -12,6 +12,8 @@ public sealed class MainForm : Form
     private const int ActionRowHeight = 54;
     private const int MinimumBatchOptionsRowHeight = 128;
     private const int MinimumBatchOptionStackHeight = 78;
+    private const int MinimumQueueGridHeight = 92;
+    private const int MinimumFlexibleContentWidth = 760;
     private const int QueueStatusColumnWidth = 108;
     private const int QueueFileColumnWidth = 202;
     private const int QueueOutputColumnWidth = 278;
@@ -373,6 +375,7 @@ public sealed class MainForm : Form
 
         var layout = BuildLayout();
         Controls.Add(layout);
+        ApplyMinimumUsableWindowSize();
         ConfigureQueueDragDropTarget(this);
         ConfigureQueueDragDropTargets(layout);
         InitializeTechnicalLog();
@@ -5322,8 +5325,124 @@ public sealed class MainForm : Form
         LoadHeaderLogoIfAvailable();
         RegisterQueueDeselectHandlers(this);
         ApplyQueueAutoFitColumnWidths();
+        ApplyMinimumUsableWindowSize();
+        ReportDebugLayoutIssues();
         startupStopwatch.Stop();
         technicalLog.Append($"Startup UI finalized after first paint. Elapsed: {startupStopwatch.ElapsedMilliseconds} ms.");
+    }
+
+    private void ApplyMinimumUsableWindowSize()
+    {
+        var minimumClientSize = GetMinimumUsableClientSize();
+        var minimumWindowSize = SizeFromClientSize(minimumClientSize);
+        minimumWindowSize.Width = Math.Max(MinimumWindowWidth, minimumWindowSize.Width);
+        minimumWindowSize.Height = Math.Max(MinimumWindowHeight, minimumWindowSize.Height);
+        MinimumSize = minimumWindowSize;
+
+        if (WindowState == FormWindowState.Normal &&
+            (ClientSize.Width < minimumClientSize.Width || ClientSize.Height < minimumClientSize.Height))
+        {
+            ClientSize = new Size(
+                Math.Max(ClientSize.Width, minimumClientSize.Width),
+                Math.Max(ClientSize.Height, minimumClientSize.Height));
+        }
+    }
+
+    private Size GetMinimumUsableClientSize()
+    {
+        var width = Math.Min(DefaultWindowWidth, Math.Max(MinimumFlexibleContentWidth, GetMinimumQueueHeaderWidth() + 24));
+        var height =
+            rootLayout?.Padding.Vertical ?? 0;
+
+        height += 44;
+        height += 116;
+        height += GetBatchOptionsMinimumHeight();
+        height += 34;
+        height += MinimumQueueGridHeight;
+        height += ActionRowHeight;
+        height += ActionRowHeight;
+        height += Math.Max(28, conversionProgressBar.PreferredSize.Height);
+        height += Math.Max(34, currentStatusLabel.PreferredHeight);
+
+        return new Size(width, height);
+    }
+
+    private int GetBatchOptionsMinimumHeight()
+    {
+        if (rootLayout?.GetControlFromPosition(0, 2) is { } optionsPanel)
+        {
+            return Math.Max(MinimumBatchOptionsRowHeight, optionsPanel.MinimumSize.Height);
+        }
+
+        return MinimumBatchOptionsRowHeight;
+    }
+
+    private int GetMinimumQueueHeaderWidth()
+    {
+        if (queueGridView.Columns.Count == 0)
+        {
+            return MinimumFlexibleContentWidth;
+        }
+
+        var width = 0;
+        foreach (DataGridViewColumn column in queueGridView.Columns)
+        {
+            width += GetQueueColumnPreferredWidth(column.Name, column.Width);
+        }
+
+        return width;
+    }
+
+    [System.Diagnostics.Conditional("DEBUG")]
+    private void ReportDebugLayoutIssues()
+    {
+        var issues = new List<string>();
+        CollectLayoutIssues(this, issues);
+        foreach (var issue in issues)
+        {
+            System.Diagnostics.Debug.WriteLine(issue);
+        }
+    }
+
+    [System.Diagnostics.Conditional("DEBUG")]
+    private static void CollectLayoutIssues(Control parent, List<string> issues)
+    {
+        if (!parent.Visible || parent.ClientSize.Width <= 0 || parent.ClientSize.Height <= 0)
+        {
+            return;
+        }
+
+        foreach (Control child in parent.Controls)
+        {
+            if (!child.Visible)
+            {
+                continue;
+            }
+
+            if (!parent.ClientRectangle.Contains(child.Bounds))
+            {
+                issues.Add($"Layout issue: {DescribeControl(child)} bounds {child.Bounds} exceed parent {DescribeControl(parent)} client {parent.ClientRectangle}.");
+            }
+
+            if (child is ComboBox comboBox && child.Height < comboBox.MinimumSize.Height)
+            {
+                issues.Add($"Layout issue: {DescribeControl(child)} height {child.Height} is smaller than minimum combo height {comboBox.MinimumSize.Height}.");
+            }
+
+            if (child is Label label && !label.AutoSize && child.Height < label.GetPreferredSize(new Size(child.Width, int.MaxValue)).Height)
+            {
+                issues.Add($"Layout issue: {DescribeControl(child)} height {child.Height} is smaller than preferred label height.");
+            }
+
+            CollectLayoutIssues(child, issues);
+        }
+    }
+
+    private static string DescribeControl(Control control)
+    {
+        var name = string.IsNullOrWhiteSpace(control.Name) ? "<unnamed>" : control.Name;
+        var text = string.IsNullOrWhiteSpace(control.Text) ? "" : $" \"{control.Text}\"";
+        return $"{control.GetType().Name} {name}{text}";
     }
 
     private void LoadHeaderLogoIfAvailable()
