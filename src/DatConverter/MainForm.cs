@@ -4,7 +4,7 @@ public sealed class MainForm : Form
 {
     private const int DetailsExpandedHeight = 220;
     private const int DetailsFooterHeight = 48;
-    private const int PreferredExpandedWindowHeight = 780;
+    private const int PreferredExpandedWindowHeight = 900;
     private const int DefaultWindowWidth = 900;
     private const int DefaultWindowHeight = 680;
     private const int MinimumWindowWidth = 880;
