@@ -5195,9 +5195,12 @@ public sealed class MainForm : Form
 
     private static string FormatNvencCapabilityLogMessage(NvencCapabilityResult capability)
     {
-        return capability.IsAvailable
-            ? $"Optional hardware encoding: available. {capability.DiagnosticSummary}"
-            : $"Optional hardware encoding: unavailable. CPU encoding remains available. {capability.DiagnosticSummary}";
+        return string.Join(
+            Environment.NewLine,
+            capability.IsAvailable
+                ? $"Optional hardware encoding: available. {capability.UserFacingStatus}"
+                : $"Optional hardware encoding: unavailable. CPU encoding remains available. {capability.UserFacingStatus}",
+            capability.TechnicalDetails);
     }
 
     private List<string> BuildSelectedItemLines(QueueItem? item)
@@ -6494,7 +6497,7 @@ public sealed class MainForm : Form
         }
 
         comboBox.SelectedItem = ConversionModes.FullDisplayName;
-        technicalLog.Append($"Full NVENC unavailable. {nvencCapability.DiagnosticSummary}");
+        technicalLog.Append(nvencCapability.UserFacingStatus);
         return true;
     }
 

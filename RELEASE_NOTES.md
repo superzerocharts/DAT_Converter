@@ -1,20 +1,20 @@
 # Release Notes
 
-## v1.0.0-rc1
+## v0.1.1-rc1
 
-DAT Converter v1.0.0-rc1 is the first release-candidate package for final manual playback/conversion QA.
+DAT Converter v0.1.1-rc1 is the first release-candidate package for final manual playback/conversion QA.
 
 ### Package
 
 - Package: `DAT_Converter_Portable.zip`
-- SHA-256: `7F54DEA783AE512EA4B6225F95EAAFB2353AEF37B72C244072DF8B5BA6CB796D`
+- SHA-256: `703F70F1B12B4DE158532574463C864086B511F49B30203A91D5F35C8384A576`
 - Portable app includes `DatConverter.exe`, bundled `ffmpeg.exe` / `ffprobe.exe`, FFmpeg license/readme files, README, and third-party notices.
 - The app uses bundled FFmpeg tools from `tools\ffmpeg` and does not depend on system `PATH`.
 
 ### QA Summary
 
 - Build passed.
-- Tests passed: 460 passed.
+- Tests passed: 467 passed.
 - Portable publish succeeded with `scripts\publish-portable.ps1`.
 - Portable launch smoke passed.
 - Package audit confirmed required runtime files are present and source/test/dev artifacts are excluded.

@@ -56,6 +56,19 @@ Use this checklist for each DAT Converter portable release.
   - Confirm the log toggle reads **Show Log** and **Hide Log**.
   - Confirm visible user-facing text uses `metadata file` instead of `sidecar`.
   - Confirm visible user-facing text does not mention `Mirasys`.
+- Run NVIDIA/NVENC workstation diagnostics when testing **Full NVENC**:
+
+```powershell
+.\tools\ffmpeg\ffmpeg.exe -hide_banner -encoders | findstr /i nvenc
+.\tools\ffmpeg\ffmpeg.exe -hide_banner -h encoder=h264_nvenc
+nvidia-smi
+$smoke = Join-Path $env:TEMP "dat_converter_nvenc_manual_smoke.mp4"
+.\tools\ffmpeg\ffmpeg.exe -y -hide_banner -loglevel verbose -f lavfi -i testsrc2=size=1280x720:rate=30 -t 3 -c:v h264_nvenc -preset p1 -cq 23 -b:v 0 $smoke
+Get-Item $smoke
+```
+
+- Full NVENC should be selectable only when the app's startup log says `Full NVENC available.`
+- If Full NVENC is unavailable, copy the app log and check which diagnostic layer failed: bundled FFmpeg, encoder listing, encoder help, `nvidia-smi`, or smoke encode.
 
 ## Publish
 

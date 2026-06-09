@@ -1,42 +1,102 @@
 using System.Diagnostics;
+using System.Globalization;
 
 namespace DatConverter;
 
 public sealed class NvencCapabilityService
 {
-    private static readonly TimeSpan DetectionTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan DetectionTimeout = TimeSpan.FromSeconds(8);
+    private readonly Func<string, IReadOnlyList<string>, ProcessRunResult> runProcess;
+    private readonly Func<string> createSmokeOutputPath;
+    private readonly Func<string, bool> fileExists;
+    private readonly Func<string, long> getFileLength;
+    private readonly Action<string> deleteFile;
+
+    public NvencCapabilityService()
+        : this(
+            RunProcess,
+            () => Path.Combine(Path.GetTempPath(), $"dat_converter_nvenc_smoke_{Guid.NewGuid():N}.mp4"),
+            File.Exists,
+            path => File.Exists(path) ? new FileInfo(path).Length : 0,
+            TryDeleteFile)
+    {
+    }
+
+    public NvencCapabilityService(
+        Func<string, IReadOnlyList<string>, ProcessRunResult> runProcess,
+        Func<string>? createSmokeOutputPath = null,
+        Func<string, bool>? fileExists = null,
+        Func<string, long>? getFileLength = null,
+        Action<string>? deleteFile = null)
+    {
+        this.runProcess = runProcess;
+        this.createSmokeOutputPath = createSmokeOutputPath ?? (() => Path.Combine(Path.GetTempPath(), $"dat_converter_nvenc_smoke_{Guid.NewGuid():N}.mp4"));
+        this.fileExists = fileExists ?? File.Exists;
+        this.getFileLength = getFileLength ?? (path => File.Exists(path) ? new FileInfo(path).Length : 0);
+        this.deleteFile = deleteFile ?? TryDeleteFile;
+    }
 
     public NvencCapabilityResult Detect(FfmpegTools tools)
     {
-        if (!tools.FfmpegExists || string.IsNullOrWhiteSpace(tools.FfmpegPath) || !File.Exists(tools.FfmpegPath))
+        var ffmpegExists = tools.FfmpegExists && !string.IsNullOrWhiteSpace(tools.FfmpegPath) && fileExists(tools.FfmpegPath);
+        var builder = new NvencDiagnosticBuilder(tools.FfmpegPath, ffmpegExists);
+
+        var nvidiaSmi = RunNvidiaSmi();
+        builder.SetNvidiaSmi(nvidiaSmi);
+
+        if (!ffmpegExists)
         {
-            return new NvencCapabilityResult(false, false, false, "Bundled ffmpeg.exe was not found.", "");
+            return builder.Build(
+                isAvailable: false,
+                encoderListed: false,
+                encoderHelpAvailable: false,
+                encoderHelpExitCode: null,
+                smokeTestSucceeded: false,
+                smokeTestExitCode: null,
+                smokeTestCommand: "",
+                smokeTestStderrTail: "",
+                userFacingStatus: "Full NVENC unavailable: bundled ffmpeg.exe was not found.",
+                plainReason: "Bundled ffmpeg.exe was not found.");
         }
 
-        var encoders = RunFfmpeg(tools.FfmpegPath, ["-hide_banner", "-encoders"]);
+        var encoders = runProcess(tools.FfmpegPath, ["-hide_banner", "-encoders"]);
         var encoderText = $"{encoders.StandardOutput}{Environment.NewLine}{encoders.StandardError}";
-        var found = encoderText.Contains("h264_nvenc", StringComparison.OrdinalIgnoreCase);
-        if (!found)
+        var encoderListed = encoderText.Contains("h264_nvenc", StringComparison.OrdinalIgnoreCase);
+        builder.SetEncoderListing(encoders, encoderText);
+        if (!encoderListed)
         {
-            return new NvencCapabilityResult(
-                false,
-                false,
-                false,
-                $"h264_nvenc was not listed by ffmpeg -encoders. Exit code: {FormatExitCode(encoders.ExitCode)}.",
-                encoderText.Trim());
+            return builder.Build(
+                isAvailable: false,
+                encoderListed: false,
+                encoderHelpAvailable: false,
+                encoderHelpExitCode: null,
+                smokeTestSucceeded: false,
+                smokeTestExitCode: null,
+                smokeTestCommand: "",
+                smokeTestStderrTail: "",
+                userFacingStatus: "Full NVENC unavailable: bundled FFmpeg does not list h264_nvenc.",
+                plainReason: "Bundled FFmpeg does not list h264_nvenc.");
         }
 
-        var help = RunFfmpeg(tools.FfmpegPath, ["-hide_banner", "-h", "encoder=h264_nvenc"]);
+        var helpArguments = new[] { "-hide_banner", "-h", "encoder=h264_nvenc" };
+        var help = runProcess(tools.FfmpegPath, helpArguments);
         var helpText = $"{help.StandardOutput}{Environment.NewLine}{help.StandardError}".Trim();
         var helpAvailable = help.ExitCode == 0 && helpText.Contains("h264_nvenc", StringComparison.OrdinalIgnoreCase);
-        var runtime = RunFfmpeg(tools.FfmpegPath, [
+        builder.SetEncoderHelp(help, helpText);
+
+        var smokeOutputPath = createSmokeOutputPath();
+        var smokeArguments = new[]
+        {
+            "-y",
             "-hide_banner",
+            "-loglevel",
+            "verbose",
             "-f",
             "lavfi",
             "-i",
-            "color=size=16x16:rate=1:duration=0.1",
-            "-frames:v",
-            "1",
+            "testsrc2=size=1280x720:rate=30",
+            "-t",
+            "3",
             "-c:v",
             "h264_nvenc",
             "-preset",
@@ -45,39 +105,43 @@ public sealed class NvencCapabilityService
             "23",
             "-b:v",
             "0",
-            "-f",
-            "null",
-            "NUL"
-        ]);
-        var runtimeText = $"{runtime.StandardOutput}{Environment.NewLine}{runtime.StandardError}".Trim();
-        var runtimeAvailable = runtime.ExitCode == 0;
-        var details = string.Join(
-            Environment.NewLine + Environment.NewLine,
-            new[]
-            {
-                "ffmpeg -encoders:",
-                encoderText.Trim(),
-                "ffmpeg -h encoder=h264_nvenc:",
-                helpText,
-                "NVENC runtime smoke test:",
-                runtimeText
-            }.Where(value => !string.IsNullOrWhiteSpace(value)));
+            smokeOutputPath
+        };
+        var smoke = runProcess(tools.FfmpegPath, smokeArguments);
+        var smokeBytes = getFileLength(smokeOutputPath);
+        var smokeSucceeded = smoke.ExitCode == 0 && fileExists(smokeOutputPath) && smokeBytes > 0;
+        var smokeCommand = $"{tools.FfmpegPath} {string.Join(" ", smokeArguments.Select(QuoteArgument))}";
+        var smokeStderrTail = Tail(smoke.StandardError, 2000);
+        builder.SetSmokeTest(smoke, smokeCommand, smokeOutputPath, smokeBytes, smokeStderrTail);
+        deleteFile(smokeOutputPath);
 
-        return new NvencCapabilityResult(
-            helpAvailable && runtimeAvailable,
-            true,
-            helpAvailable,
-            helpAvailable && runtimeAvailable
-                ? "h264_nvenc is listed by bundled FFmpeg, encoder help is available, and the runtime smoke test passed."
-                : $"h264_nvenc is listed by bundled FFmpeg, but runtime availability was not confirmed. Help exit code: {FormatExitCode(help.ExitCode)}; smoke test exit code: {FormatExitCode(runtime.ExitCode)}.",
-            details);
+        return builder.Build(
+            isAvailable: smokeSucceeded,
+            encoderListed: true,
+            encoderHelpAvailable: helpAvailable,
+            encoderHelpExitCode: help.ExitCode,
+            smokeTestSucceeded: smokeSucceeded,
+            smokeTestExitCode: smoke.ExitCode,
+            smokeTestCommand: smokeCommand,
+            smokeTestStderrTail: smokeStderrTail,
+            userFacingStatus: smokeSucceeded
+                ? "Full NVENC available."
+                : "Full NVENC unavailable: h264_nvenc smoke test failed.",
+            plainReason: smokeSucceeded
+                ? "h264_nvenc smoke test succeeded."
+                : "h264_nvenc smoke test failed.");
     }
 
-    private static ProcessRunResult RunFfmpeg(string ffmpegPath, IReadOnlyList<string> arguments)
+    private ProcessRunResult RunNvidiaSmi()
+    {
+        return runProcess("nvidia-smi", ["--query-gpu=name,driver_version", "--format=csv,noheader"]);
+    }
+
+    private static ProcessRunResult RunProcess(string executablePath, IReadOnlyList<string> arguments)
     {
         var startInfo = new ProcessStartInfo
         {
-            FileName = ffmpegPath,
+            FileName = executablePath,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -129,9 +193,180 @@ public sealed class NvencCapabilityService
         }
     }
 
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private static string QuoteArgument(string value)
+    {
+        return value.Contains(' ') || value.Contains(';') || value.Contains(':')
+            ? $"\"{value}\""
+            : value;
+    }
+
     private static string FormatExitCode(int? exitCode)
     {
-        return exitCode?.ToString() ?? "none";
+        return exitCode?.ToString(CultureInfo.InvariantCulture) ?? "none";
+    }
+
+    private static string FormatYesNo(bool value)
+    {
+        return value ? "yes" : "no";
+    }
+
+    private static string FormatProcessText(string value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? "(none)" : value.Trim();
+    }
+
+    private static string Tail(string value, int maxCharacters)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "(none)";
+        }
+
+        var trimmed = value.Trim();
+        return trimmed.Length <= maxCharacters ? trimmed : trimmed[^maxCharacters..];
+    }
+
+    private static string SummarizeNvidiaSmi(ProcessRunResult result)
+    {
+        if (result.ExitCode != 0)
+        {
+            return FormatProcessText(result.StandardError);
+        }
+
+        var lines = result.StandardOutput
+            .Split([Environment.NewLine, "\n"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Take(3)
+            .ToList();
+        return lines.Count == 0 ? "(no GPU rows reported)" : string.Join("; ", lines);
+    }
+
+    private sealed class NvencDiagnosticBuilder
+    {
+        private readonly List<string> lines = new();
+        private readonly string ffmpegPath;
+        private readonly bool ffmpegExists;
+        private ProcessRunResult? nvidiaSmi;
+        private string nvidiaSmiSummary = "(not checked)";
+        private ProcessRunResult? encoderListing;
+        private string encoderListingText = "";
+        private ProcessRunResult? encoderHelp;
+        private string encoderHelpText = "";
+        private ProcessRunResult? smokeTest;
+        private string smokeCommand = "";
+        private string smokeOutputPath = "";
+        private long smokeOutputBytes;
+        private string smokeStderrTail = "";
+
+        public NvencDiagnosticBuilder(string ffmpegPath, bool ffmpegExists)
+        {
+            this.ffmpegPath = ffmpegPath;
+            this.ffmpegExists = ffmpegExists;
+        }
+
+        public void SetNvidiaSmi(ProcessRunResult result)
+        {
+            nvidiaSmi = result;
+            nvidiaSmiSummary = SummarizeNvidiaSmi(result);
+        }
+
+        public void SetEncoderListing(ProcessRunResult result, string text)
+        {
+            encoderListing = result;
+            encoderListingText = text;
+        }
+
+        public void SetEncoderHelp(ProcessRunResult result, string text)
+        {
+            encoderHelp = result;
+            encoderHelpText = text;
+        }
+
+        public void SetSmokeTest(ProcessRunResult result, string command, string outputPath, long outputBytes, string stderrTail)
+        {
+            smokeTest = result;
+            smokeCommand = command;
+            smokeOutputPath = outputPath;
+            smokeOutputBytes = outputBytes;
+            smokeStderrTail = stderrTail;
+        }
+
+        public NvencCapabilityResult Build(
+            bool isAvailable,
+            bool encoderListed,
+            bool encoderHelpAvailable,
+            int? encoderHelpExitCode,
+            bool smokeTestSucceeded,
+            int? smokeTestExitCode,
+            string smokeTestCommand,
+            string smokeTestStderrTail,
+            string userFacingStatus,
+            string plainReason)
+        {
+            lines.Clear();
+            lines.Add("NVENC capability diagnostic");
+            lines.Add($"ffmpeg path: {ffmpegPath}");
+            lines.Add($"ffmpeg exists: {FormatYesNo(ffmpegExists)}");
+            lines.Add($"h264_nvenc listed: {FormatYesNo(encoderListed)}");
+            lines.Add($"ffmpeg -encoders exit code: {FormatExitCode(encoderListing?.ExitCode)}");
+            lines.Add($"h264_nvenc help available: {FormatYesNo(encoderHelpAvailable)}");
+            lines.Add($"h264_nvenc help exit code: {FormatExitCode(encoderHelpExitCode)}");
+            lines.Add($"nvidia-smi available: {FormatYesNo(nvidiaSmi?.ExitCode == 0)}");
+            lines.Add($"nvidia-smi exit code: {FormatExitCode(nvidiaSmi?.ExitCode)}");
+            lines.Add($"nvidia-smi output summary: {nvidiaSmiSummary}");
+            lines.Add($"smoke test command: {FormatProcessText(smokeTestCommand)}");
+            lines.Add($"smoke test output: {FormatProcessText(smokeOutputPath)}");
+            lines.Add($"smoke test output bytes: {smokeOutputBytes}");
+            lines.Add($"smoke test exit code: {FormatExitCode(smokeTestExitCode)}");
+            lines.Add($"smoke test stderr tail: {FormatProcessText(smokeTestStderrTail)}");
+            lines.Add($"final app decision: Full NVENC {(isAvailable ? "enabled" : "disabled")}");
+            lines.Add($"plain reason: {plainReason}");
+
+            if (!string.IsNullOrWhiteSpace(encoderListingText))
+            {
+                lines.Add("ffmpeg -encoders output tail:");
+                lines.Add(Tail(encoderListingText, 2000));
+            }
+
+            if (!string.IsNullOrWhiteSpace(encoderHelpText))
+            {
+                lines.Add("ffmpeg -h encoder=h264_nvenc output tail:");
+                lines.Add(Tail(encoderHelpText, 2000));
+            }
+
+            if (smokeTest is not null && !string.IsNullOrWhiteSpace(smokeTest.StandardOutput))
+            {
+                lines.Add("smoke test stdout tail:");
+                lines.Add(Tail(smokeTest.StandardOutput, 2000));
+            }
+
+            return new NvencCapabilityResult(
+                isAvailable,
+                encoderListed,
+                encoderHelpAvailable,
+                nvidiaSmi?.ExitCode == 0,
+                smokeTestSucceeded,
+                encoderHelpExitCode,
+                smokeTestExitCode,
+                smokeTestCommand,
+                smokeTestStderrTail,
+                userFacingStatus,
+                plainReason,
+                string.Join(Environment.NewLine, lines));
+        }
     }
 }
 
@@ -139,5 +374,15 @@ public sealed record NvencCapabilityResult(
     bool IsAvailable,
     bool EncoderListed,
     bool EncoderHelpAvailable,
-    string DiagnosticSummary,
-    string TechnicalDetails);
+    bool NvidiaSmiAvailable,
+    bool SmokeTestSucceeded,
+    int? EncoderHelpExitCode,
+    int? SmokeTestExitCode,
+    string SmokeTestCommand,
+    string SmokeTestStderrTail,
+    string UserFacingStatus,
+    string PlainReason,
+    string TechnicalDetails)
+{
+    public string DiagnosticSummary => UserFacingStatus;
+}
