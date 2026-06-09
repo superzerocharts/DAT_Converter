@@ -97,6 +97,7 @@ public sealed class QueueAddFlowServiceTests
         Assert.Null(defaults.ChosenOutputFolder);
         Assert.Equal(FpsSelectionMode.AutoDetect, defaults.FpsSettings.SelectionMode);
         Assert.Equal("Auto-detect", defaults.FpsSettings.RequestedDisplayValue);
+        Assert.False(defaults.BurnTimestamp);
     }
 
     private static QueueItem CreateItem(QueueItemStatus status)

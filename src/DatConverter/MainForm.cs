@@ -5,13 +5,13 @@ public sealed class MainForm : Form
     private const int DetailsExpandedHeight = 220;
     private const int DetailsFooterHeight = 62;
     private const int DefaultWindowWidth = 1080;
-    private const int DefaultWindowHeight = 980;
+    private const int DefaultWindowHeight = 1020;
     private const int MinimumWindowWidth = 960;
-    private const int MinimumWindowHeight = 880;
+    private const int MinimumWindowHeight = 920;
     private const int WindowScreenMargin = 8;
     private const int ActionRowHeight = 66;
     private const int FileSelectionRowHeight = 180;
-    private const int MinimumBatchOptionsRowHeight = 128;
+    private const int MinimumBatchOptionsRowHeight = 160;
     private const int MinimumBatchOptionStackHeight = 78;
     private const int MinimumQueueVisibleRows = 4;
     private const int MinimumQueueGridHeight = 156;
@@ -50,6 +50,7 @@ public sealed class MainForm : Form
     private readonly ComboBox outputFormatComboBox;
     private readonly ComboBox conversionModeComboBox;
     private readonly ComboBox frameRateComboBox;
+    private readonly CheckBox batchBurnTimestampCheckBox;
     private readonly Button convertButton;
     private readonly Button cancelButton;
     private readonly ProgressBar conversionProgressBar;
@@ -65,6 +66,7 @@ public sealed class MainForm : Form
     private readonly ProbeService probeService;
     private readonly ConversionService conversionService;
     private readonly QueueItemFpsResolver queueItemFpsResolver = new();
+    private readonly StoryboardCombinedFpsResolver storyboardCombinedFpsResolver = new();
     private readonly AppSettingsService appSettingsService;
     private readonly AppSettings appSettings;
     private readonly TechnicalLogBuffer technicalLog = new();
@@ -84,7 +86,6 @@ public sealed class MainForm : Form
     private TableLayoutPanel? rootLayout;
     private RowStyle? detailsRowStyle;
     private Control? detailsPanel;
-    private PictureBox? headerLogoPictureBox;
     private QueueItem? currentQueueItem;
     private QueueSettingsSnapshot? activeQueueSettings;
     private QueueSettingsSnapshot? lastQueueRunSettings;
@@ -102,6 +103,7 @@ public sealed class MainForm : Form
     private bool queueColumnsUserResized;
     private bool isApplyingQueueColumnWidths;
     private bool isRefreshingQueueGrid;
+    private bool isApplyingBatchBurnTimestampUi;
     private int pendingRunningQueueAddOperations;
     private bool deferredStartupCompleted;
 
@@ -220,6 +222,28 @@ public sealed class MainForm : Form
             : "Duplicate";
     }
 
+    public static bool CanClearQueueForState(int queueItemCount, bool isQueueProcessing)
+    {
+        return queueItemCount > 0 && !isQueueProcessing;
+    }
+
+    public static int ClearQueueForState(IList<QueueItem> queue, bool isQueueProcessing)
+    {
+        if (!CanClearQueueForState(queue.Count, isQueueProcessing))
+        {
+            return 0;
+        }
+
+        var removedCount = queue.Count;
+        queue.Clear();
+        return removedCount;
+    }
+
+    public static bool IsBatchBurnTimestampAvailable(string? conversionMode)
+    {
+        return BurnTimestampMetadataBuilder.IsSupportedMode(conversionMode);
+    }
+
     public MainForm()
     {
         ffmpegTools = ToolPathService.ResolveBundledTools();
@@ -231,7 +255,7 @@ public sealed class MainForm : Form
         selectionState.OutputDestinationMode = ParseOutputDestinationMode(appSettings.OutputDestinationMode);
         selectionState.ChosenOutputFolderPath = appSettings.LastChosenOutputFolder;
 
-        Text = "DAT Converter";
+        Text = $"DAT Converter v{TechnicalLogBuffer.GetAppDisplayVersion()}";
         DoubleBuffered = true;
         var appIcon = TryLoadAppIcon();
         if (appIcon is not null)
@@ -289,6 +313,13 @@ public sealed class MainForm : Form
         conversionModeComboBox = CreateComboBox(ConversionModes.DisplayOrder, FormatConversionModeForDisplay(appSettings.ConversionMode));
         ConfigureConversionModeComboBox(conversionModeComboBox);
         frameRateComboBox = CreateComboBox(SourceFpsOptions.DisplayOrder, appSettings.Fps);
+        batchBurnTimestampCheckBox = new CheckBox
+        {
+            AutoSize = true,
+            Text = "Burn timestamp into video",
+            Checked = false,
+            Margin = new Padding(0, 0, 0, 0)
+        };
         convertButton = CreateButton("Convert");
         cancelButton = CreateButton("Cancel Current");
         cancelButton.Size = new Size(190, 42);
@@ -310,7 +341,7 @@ public sealed class MainForm : Form
         };
         normalStatusFont = currentStatusLabel.Font;
         boldStatusFont = new Font(normalStatusFont, FontStyle.Bold);
-        showDetailsButton = CreateButton("Show Details");
+        showDetailsButton = CreateButton("Show Log");
         showDetailsButton.Size = new Size(170, 42);
         statusLogTextBox = new RichTextBox
         {
@@ -369,6 +400,7 @@ public sealed class MainForm : Form
         outputFormatComboBox.SelectedIndexChanged += OutputFormatComboBox_SelectedIndexChanged;
         conversionModeComboBox.SelectedIndexChanged += ConversionModeComboBox_SelectedIndexChanged;
         frameRateComboBox.SelectedIndexChanged += FrameRateComboBox_SelectedIndexChanged;
+        batchBurnTimestampCheckBox.CheckedChanged += BatchBurnTimestampCheckBox_CheckedChanged;
         convertButton.Click += ConvertButton_Click;
         cancelButton.Click += CancelButton_Click;
         openOutputFolderButton.Click += OpenOutputFolderButton_Click;
@@ -388,6 +420,7 @@ public sealed class MainForm : Form
         technicalLog.Append($"Output destination mode: {FormatOutputDestinationMode(selectionState.OutputDestinationMode)}.");
         isInitializing = false;
         ApplyOutputDestinationMode();
+        ApplyBatchBurnTimestampModeUi();
         ApplyStartupToolValidation();
     }
 
@@ -456,21 +489,6 @@ public sealed class MainForm : Form
         }
     }
 
-    private static Image? TryLoadHeaderLogo()
-    {
-        var logoPath = Path.Combine(AppContext.BaseDirectory, "Assets", "DatConverterLogo.png");
-        try
-        {
-            return File.Exists(logoPath)
-                ? Image.FromStream(new MemoryStream(File.ReadAllBytes(logoPath)))
-                : null;
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-    }
-
     private async void BrowseFileButton_Click(object? sender, EventArgs e)
     {
         if (!TryPrepareForQueueAdd())
@@ -500,7 +518,7 @@ public sealed class MainForm : Form
                 return;
             }
 
-            await AddFilesToQueueAsync(dialog.FileNames, addingToRunningQueue);
+            await AddFilesToQueueWithStoryboardDetectionAsync(dialog.FileNames, addingToRunningQueue);
         }
         finally
         {
@@ -623,7 +641,7 @@ public sealed class MainForm : Form
 
             if (plan.FilePathsToAdd.Count > 0)
             {
-                await AddFilesToQueueAsync(plan.FilePathsToAdd, addingToRunningQueue);
+                await AddFilesToQueueWithStoryboardDetectionAsync(plan.FilePathsToAdd, addingToRunningQueue);
             }
         }
         finally
@@ -776,6 +794,48 @@ public sealed class MainForm : Form
         }
 
         var importPlan = new FolderImportPlanner().Build(scanResult.DatFiles);
+        if (importPlan.StoryboardExportCount > 0)
+        {
+            var storyboardChoice = ShowStoryboardImportDialog(importPlan.RecommendedStoryboardPlans);
+            if (storyboardChoice == FolderImportReviewChoice.Cancel)
+            {
+                technicalLog.Append("Storyboard import canceled by user.");
+                RefreshStatusLog("Storyboard import canceled. No files were added.");
+                return;
+            }
+
+            var storyboardAddSettings = GetQueueAddSettings();
+            var storyboardRows = storyboardChoice == FolderImportReviewChoice.CreateOneStoryboardVideo
+                ? importPlan.StoryboardExportCount
+                : importPlan.StoryboardClipCount;
+            var remainingRows = importPlan.RecommendedSingleDatPaths.Count;
+            var storyboardRowsToAdd = storyboardRows + remainingRows;
+            var storyboardAvailableSlots = 100 - queueItems.Count;
+            if (storyboardRowsToAdd > storyboardAvailableSlots)
+            {
+                technicalLog.Append($"Storyboard add blocked by queue limit. Queue count: {queueItems.Count}; Available slots: {storyboardAvailableSlots}; Addable rows from scan: {storyboardRowsToAdd}.");
+                RefreshStatusLog(queueLimitMessage);
+                MessageBox.Show(this, queueLimitMessage, "Add Folder", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            technicalLog.Append($"Folder scan completed. Folder: {folderPath}; Include subfolders: {FormatYesNo(includeSubfolders)}; Found: {scanResult.DatFiles.Count}; Storyboard exports: {importPlan.StoryboardExportCount}; Storyboard clips: {storyboardRows}; Single DAT files: {importPlan.SingleDatCount}; Split recordings: {importPlan.SplitRecordingCount}; Ambiguous groups: {importPlan.AmbiguousItemCount}; Skipped/inaccessible folders: {scanResult.SkippedPaths.Count}.");
+            if (storyboardChoice == FolderImportReviewChoice.CreateOneStoryboardVideo)
+            {
+                await AddCombinedStoryboardPlansToQueueAsync(importPlan.RecommendedStoryboardPlans, storyboardAddSettings);
+            }
+            else
+            {
+                await AddStoryboardPlansToQueueAsync(importPlan.RecommendedStoryboardPlans, storyboardAddSettings);
+            }
+            if (remainingRows > 0)
+            {
+                await AddFilesToQueueAsync(importPlan.RecommendedSingleDatPaths);
+            }
+
+            return;
+        }
+
         var reviewChoice = ShowFolderImportReviewDialog(importPlan);
         if (reviewChoice == FolderImportReviewChoice.Cancel)
         {
@@ -897,6 +957,85 @@ public sealed class MainForm : Form
         root.Controls.Add(buttons, 0, 1);
         dialog.Controls.Add(root);
         dialog.AcceptButton = yesButton;
+        dialog.CancelButton = cancelButton;
+        dialog.ShowDialog(this);
+        return choice;
+    }
+
+    private FolderImportReviewChoice ShowStoryboardImportDialog(IReadOnlyList<SpotterStoryboardPlan> storyboardPlans)
+    {
+        var clipCount = storyboardPlans.Sum(plan => plan.ClipCount);
+        var clipText = clipCount == 1
+            ? "1 storyboard clip"
+            : $"{clipCount} storyboard clips";
+
+        using var dialog = new Form
+        {
+            Text = "Storyboard export detected",
+            StartPosition = FormStartPosition.CenterParent,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+            ShowInTaskbar = false,
+            ClientSize = new Size(620, 260),
+            Font = Font
+        };
+
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            Padding = new Padding(18)
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 72));
+
+        var summary = new Label
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = false,
+            Text = $"This folder contains {clipText} from multiple cameras.\r\n\r\nAdd Clips adds each clip separately.\r\n\r\nMerge creates one combined video. It uses Full encoding, so it is slower and can take longer.",
+            TextAlign = ContentAlignment.TopLeft
+        };
+
+        var buttons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.RightToLeft,
+            WrapContents = false,
+            Padding = new Padding(0, 10, 0, 0)
+        };
+        var cancelButton = CreateButton("Cancel");
+        cancelButton.Size = new Size(100, 42);
+        var combineButton = CreateButton("Merge");
+        combineButton.Size = new Size(120, 42);
+        combineButton.TextAlign = ContentAlignment.MiddleCenter;
+        var addSeparateButton = CreateButton("Add Clips");
+        addSeparateButton.Size = new Size(120, 42);
+        var choice = FolderImportReviewChoice.Cancel;
+        cancelButton.Click += (_, _) =>
+        {
+            choice = FolderImportReviewChoice.Cancel;
+            dialog.DialogResult = DialogResult.Cancel;
+        };
+        addSeparateButton.Click += (_, _) =>
+        {
+            choice = FolderImportReviewChoice.ImportEveryDatSeparately;
+            dialog.DialogResult = DialogResult.OK;
+        };
+        combineButton.Click += (_, _) =>
+        {
+            choice = FolderImportReviewChoice.CreateOneStoryboardVideo;
+            dialog.DialogResult = DialogResult.OK;
+        };
+        buttons.Controls.Add(cancelButton);
+        buttons.Controls.Add(combineButton);
+        buttons.Controls.Add(addSeparateButton);
+        root.Controls.Add(summary, 0, 0);
+        root.Controls.Add(buttons, 0, 1);
+        dialog.Controls.Add(root);
+        dialog.AcceptButton = addSeparateButton;
         dialog.CancelButton = cancelButton;
         dialog.ShowDialog(this);
         return choice;
@@ -1244,7 +1383,9 @@ public sealed class MainForm : Form
                 return;
             }
 
-            var plannedOutputPath = item.IsSplitRecording && item.SplitExportPlan is not null
+            var plannedOutputPath = item.IsCombinedStoryboard && item.StoryboardPlan is not null
+                ? PlanStoryboardOutputPath(item.StoryboardPlan, item.InputPath, outputFolderValidation.FolderPath, ParseOutputFormatDisplay(formatComboBox.SelectedItem?.ToString()), GetTrimOutputSuffix(item))
+                : item.IsSplitRecording && item.SplitExportPlan is not null
                 ? PlanSplitRecordingOutputPath(item.SplitExportPlan, item.InputPath, outputFolderValidation.FolderPath, ParseOutputFormatDisplay(formatComboBox.SelectedItem?.ToString()), GetTrimOutputSuffix(item), ResolveLogicalOutputBaseName(item))
                 : PlanQueueOutputPath(item.InputPath, outputFolderValidation.FolderPath, ParseOutputFormatDisplay(formatComboBox.SelectedItem?.ToString()), item);
             if (string.IsNullOrWhiteSpace(plannedOutputPath))
@@ -1253,7 +1394,7 @@ public sealed class MainForm : Form
             }
 
             item.PlannedOutputPath = plannedOutputPath;
-            if (item.IsSplitRecording)
+            if (item.IsSplitRecording || item.IsCombinedStoryboard)
             {
                 item.CustomOutputPath = plannedOutputPath;
                 item.HasCustomOutputPath = true;
@@ -1311,7 +1452,7 @@ public sealed class MainForm : Form
             SetApplyAvailability();
 
             var settings = QueueItemFpsSettings.AutoDetect();
-            var resolution = await Task.Run(() => queueItemFpsResolver.ResolveQueueItemFps(item.InputPath, settings));
+            var resolution = await Task.Run(() => ResolveQueueItemFps(item, settings));
             if (dialog.IsDisposed)
             {
                 return;
@@ -1573,6 +1714,7 @@ public sealed class MainForm : Form
         var resolvedConversionMode = conversionMode;
         var modeChanged = !string.Equals(resolvedConversionMode, item.ConversionMode, StringComparison.OrdinalIgnoreCase);
         var fpsChanged = !AreFpsSettingsEquivalent(fpsSettings, item.FpsSettings);
+        var burnTimestampChanged = burnTimestamp != item.BurnTimestamp;
 
         string? plannedOutputPath;
         string? customOutputPath;
@@ -1620,7 +1762,9 @@ public sealed class MainForm : Form
                 return false;
             }
 
-            plannedOutputPath = item.IsSplitRecording && item.SplitExportPlan is not null
+            plannedOutputPath = item.IsCombinedStoryboard && item.StoryboardPlan is not null
+                ? PlanStoryboardOutputPath(item.StoryboardPlan, item.InputPath, outputFolderValidation.FolderPath, outputFormat, GetTrimOutputSuffix(item))
+                : item.IsSplitRecording && item.SplitExportPlan is not null
                 ? PlanSplitRecordingOutputPath(item.SplitExportPlan, item.InputPath, outputFolderValidation.FolderPath, outputFormat, GetTrimOutputSuffix(item), ResolveLogicalOutputBaseName(item))
                 : PlanQueueOutputPath(item.InputPath, outputFolderValidation.FolderPath, outputFormat, item);
             if (string.IsNullOrWhiteSpace(plannedOutputPath))
@@ -1631,8 +1775,8 @@ public sealed class MainForm : Form
                 return false;
             }
 
-            customOutputPath = item.IsSplitRecording ? plannedOutputPath : null;
-            hasCustomOutputPath = item.IsSplitRecording;
+            customOutputPath = item.IsSplitRecording || item.IsCombinedStoryboard ? plannedOutputPath : null;
+            hasCustomOutputPath = item.IsSplitRecording || item.IsCombinedStoryboard;
         }
 
         var directOutputPath = GetDirectOutputPathForQueueRefresh(item, Path.GetDirectoryName(plannedOutputPath) ?? "", outputFormat);
@@ -1649,12 +1793,13 @@ public sealed class MainForm : Form
         item.HasCustomOutputPath = hasCustomOutputPath;
         item.HasUserCustomOutputPath = item.HasUserCustomOutputPath || outputPathChanged;
         item.HasCustomFormat = item.HasCustomFormat || formatChanged;
-        item.HasCustomMode = item.HasCustomMode || modeChanged || burnTimestamp;
+        item.HasCustomMode = item.HasCustomMode || modeChanged;
         item.HasCustomFpsSetting = item.HasCustomFpsSetting || fpsChanged;
+        item.HasCustomBurnTimestamp = item.HasCustomBurnTimestamp || burnTimestampChanged;
         item.HasExistingDirectOutput = hasExistingDirectOutput;
         if (fpsChanged || item.RequiresManualFpsSelection || !item.HasResolvedFps)
         {
-            item.ApplyFpsResolution(fpsSettings, queueItemFpsResolver.ResolveQueueItemFps(item.InputPath, fpsSettings));
+            item.ApplyFpsResolution(fpsSettings, ResolveQueueItemFps(item, fpsSettings));
         }
 
         var hasReusableProbeForFps = QueueItemStatusService.HasReusableProbeForCurrentFps(item);
@@ -1679,6 +1824,9 @@ public sealed class MainForm : Form
             item.Status = QueueItemStatus.Warning;
             item.StatusText = "Needs FPS";
             item.ProgressText = "Choose Source FPS";
+        }
+        else if (QueueItemStatusService.ApplyCombinedStoryboardReadiness(item))
+        {
         }
         else
         {
@@ -1747,14 +1895,13 @@ public sealed class MainForm : Form
     private bool TryResetQueueItemToQueueDefaults(QueueItem item, IWin32Window owner)
     {
         item.ClearCustomSettings();
-        item.BurnTimestamp = false;
         var result = QueueItemRefreshService.RefreshEditableItems(
             new[] { item },
             CaptureCurrentQueueSettings(),
             (queueItem, refreshSettings) => ResolveActiveQueueOutputFolder(queueItem.InputPath, refreshSettings),
             (queueItem, outputFolderPath, outputFormat) => PlanQueueOutputPath(queueItem.InputPath, outputFolderPath, outputFormat, queueItem),
             GetDirectOutputPathForQueueRefresh,
-            (queueItem, refreshSettings) => ResolveQueueItemFps(queueItem.InputPath, refreshSettings));
+            (queueItem, refreshSettings) => ResolveQueueItemFps(queueItem, refreshSettings));
 
         if (result.InvalidCount > 0)
         {
@@ -1875,7 +2022,7 @@ public sealed class MainForm : Form
             addSettings.OutputDestinationMode,
             addSettings.OutputDestinationMode == OutputDestinationMode.ChooseOutputFolder ? outputFolderPath : null,
             addSettings.OutputFormat,
-            queueItemFpsResolver.ResolveQueueItemFps(source.InputPath, freshFpsSettings),
+            ResolveQueueItemFps(source, freshFpsSettings),
             freshFpsSettings);
         copy.LogicalOutputBaseName = source.LogicalOutputBaseName ?? ResolveLogicalOutputBaseName(source);
 
@@ -1890,16 +2037,20 @@ public sealed class MainForm : Form
 
     private void ClearCompletedQueueButton_Click(object? sender, EventArgs e)
     {
-        var removedCount = queueItems.RemoveAll(item => item.Status is QueueItemStatus.Completed
-            or QueueItemStatus.Skipped
-            or QueueItemStatus.Failed
-            or QueueItemStatus.Canceled
-            or QueueItemStatus.Unsupported
-            or QueueItemStatus.Invalid);
+        var removedCount = ClearQueueForState(queueItems, isQueueProcessing);
+        if (removedCount == 0)
+        {
+            RefreshStatusLog(isQueueProcessing ? "Clear is unavailable while the queue is running." : "The queue is already empty.");
+            return;
+        }
+
         ResetQueueColumnAutoFitIfQueueIsEmpty();
-        technicalLog.Append($"Cleared {removedCount} completed queue item(s).");
+        ResetBatchOptionsForNewQueue("Batch Options reset to defaults after clearing the queue.");
+        technicalLog.Append($"Cleared all queue item(s). Items cleared: {removedCount}.");
         RefreshQueueGrid();
-        RefreshStatusLog(removedCount == 1 ? "Cleared one completed item." : $"Cleared {removedCount} completed items.");
+        RefreshDetailsText(DetailsScrollMode.Bottom);
+        RefreshStatusLog(removedCount == 1 ? "Cleared one queue item." : $"Cleared {removedCount} queue items.");
+        UpdateQueueButtonState();
     }
 
     private void ResetQueueColumnAutoFitIfQueueIsEmpty()
@@ -1959,11 +2110,25 @@ public sealed class MainForm : Form
             return;
         }
 
+        ApplyBatchBurnTimestampModeUi();
         technicalLog.Append($"Conversion mode changed to {GetSelectedConversionModeForDisplay()}.");
         SaveCurrentSettings();
         RefreshStatusLog("Conversion mode changed.");
         UpdateConvertButtonState();
         await RefreshQueuedItemsFromCurrentSettingsAsync("Conversion mode changed");
+    }
+
+    private async void BatchBurnTimestampCheckBox_CheckedChanged(object? sender, EventArgs e)
+    {
+        if (isInitializing || isApplyingBatchBurnTimestampUi)
+        {
+            return;
+        }
+
+        ApplyBatchBurnTimestampModeUi();
+        technicalLog.Append($"Batch burn timestamp changed to {FormatYesNo(batchBurnTimestampCheckBox.Checked)}.");
+        RefreshStatusLog("Batch burn timestamp option changed.");
+        await RefreshQueuedItemsFromCurrentSettingsAsync("Batch burn timestamp changed");
     }
 
     private async void FrameRateComboBox_SelectedIndexChanged(object? sender, EventArgs e)
@@ -2229,7 +2394,10 @@ public sealed class MainForm : Form
                 outputFormat,
                 addSettings.ConversionMode,
                 addSettings.Fps,
-                hasExistingPlannedOutput);
+                hasExistingPlannedOutput)
+            {
+                BurnTimestamp = addSettings.BurnTimestamp && BurnTimestampMetadataBuilder.IsSupportedMode(addSettings.ConversionMode)
+            };
             var shouldResolveAutoDetectInEditor = requireItemConfirmation &&
                                                   addSettings.FpsSettings.SelectionMode == FpsSelectionMode.AutoDetect;
             var fpsResolution = shouldResolveAutoDetectInEditor
@@ -2321,6 +2489,83 @@ public sealed class MainForm : Form
         if (newlyAddedItems.Count > 0 && !isQueueProcessing && !isConversionRunning)
         {
             await PreProbeWaitingQueueItemsIfIdleAsync();
+        }
+    }
+
+    private async Task AddFilesToQueueWithStoryboardDetectionAsync(IReadOnlyCollection<string> filePaths, bool requireItemConfirmation = false)
+    {
+        if (requireItemConfirmation || isQueueProcessing || filePaths.Count == 0)
+        {
+            await AddFilesToQueueAsync(filePaths, requireItemConfirmation);
+            return;
+        }
+
+        var remainingPaths = filePaths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .ToList();
+        var storyboardPlans = new List<SpotterStoryboardPlan>();
+        foreach (var group in remainingPaths.GroupBy(path => Path.GetDirectoryName(Path.GetFullPath(path)) ?? "", StringComparer.OrdinalIgnoreCase))
+        {
+            var folder = group.Key;
+            var storyboardPlan = new SpotterStoryboardExportDetector().Detect(folder);
+            if (!storyboardPlan.IsStrongConfidence)
+            {
+                continue;
+            }
+
+            var storyboardDatPaths = storyboardPlan.Clips
+                .Select(clip => Path.GetFullPath(clip.DatFilePath))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (!group.Any(path => storyboardDatPaths.Contains(Path.GetFullPath(path))))
+            {
+                continue;
+            }
+
+            storyboardPlans.Add(storyboardPlan);
+            remainingPaths = remainingPaths
+                .Where(path => !storyboardDatPaths.Contains(Path.GetFullPath(path)))
+                .ToList();
+        }
+
+        if (storyboardPlans.Count == 0)
+        {
+            await AddFilesToQueueAsync(filePaths);
+            return;
+        }
+
+        var choice = ShowStoryboardImportDialog(storyboardPlans);
+        if (choice == FolderImportReviewChoice.Cancel)
+        {
+            technicalLog.Append("Storyboard file import canceled by user.");
+            RefreshStatusLog("Storyboard import canceled. No files were added.");
+            return;
+        }
+
+        var addSettings = GetQueueAddSettings();
+        var rowsToAdd = (choice == FolderImportReviewChoice.CreateOneStoryboardVideo
+            ? storyboardPlans.Count
+            : storyboardPlans.Sum(plan => plan.ClipCount)) + remainingPaths.Count;
+        var availableSlots = 100 - queueItems.Count;
+        if (rowsToAdd > availableSlots)
+        {
+            const string queueLimitMessage = "The queue is limited to 100 files for safety. Add fewer files or process the current queue first.";
+            technicalLog.Append($"Storyboard file add blocked by queue limit. Queue count: {queueItems.Count}; Available slots: {availableSlots}; Addable rows: {rowsToAdd}.");
+            RefreshStatusLog(queueLimitMessage);
+            MessageBox.Show(this, queueLimitMessage, "Add Files", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
+        if (choice == FolderImportReviewChoice.CreateOneStoryboardVideo)
+        {
+            await AddCombinedStoryboardPlansToQueueAsync(storyboardPlans, addSettings);
+        }
+        else
+        {
+            await AddStoryboardPlansToQueueAsync(storyboardPlans, addSettings);
+        }
+        if (remainingPaths.Count > 0)
+        {
+            await AddFilesToQueueAsync(remainingPaths);
         }
     }
 
@@ -2474,7 +2719,7 @@ public sealed class MainForm : Form
             (item, refreshSettings) => ResolveActiveQueueOutputFolder(item.InputPath, refreshSettings),
             (item, outputFolderPath, outputFormat) => PlanQueueOutputPath(item.InputPath, outputFolderPath, outputFormat, item),
             GetDirectOutputPathForQueueRefresh,
-            (item, refreshSettings) => ResolveQueueItemFps(item.InputPath, refreshSettings));
+            (item, refreshSettings) => ResolveQueueItemFps(item, refreshSettings));
 
         if (result.RefreshedCount == 0 && result.InvalidCount == 0)
         {
@@ -2540,6 +2785,167 @@ public sealed class MainForm : Form
         }
 
         RefreshQueueGrid();
+        await PreProbeWaitingQueueItemsIfIdleAsync();
+    }
+
+    private async Task AddStoryboardPlansToQueueAsync(IReadOnlyList<SpotterStoryboardPlan> storyboardPlans, QueueSettingsSnapshot addSettings)
+    {
+        var addedCount = 0;
+        foreach (var plan in storyboardPlans)
+        {
+            if (!plan.IsStrongConfidence)
+            {
+                technicalLog.Append($"Storyboard import skipped because the plan is not strong enough. Folder: {plan.ExportFolder}; Warnings: {string.Join("; ", plan.Warnings)}");
+                technicalLog.AppendBlock("Storyboard export technical details", plan.BuildTechnicalReport());
+                continue;
+            }
+
+            technicalLog.AppendBlock("Storyboard export technical details", plan.BuildTechnicalReport());
+            foreach (var clip in plan.Clips.OrderBy(clip => clip.ClipNumber))
+            {
+                var validation = InputFileValidator.ValidateDatFile(clip.DatFilePath);
+                if (!validation.IsValid || string.IsNullOrWhiteSpace(validation.FilePath))
+                {
+                    technicalLog.Append($"Storyboard clip skipped invalid DAT. Clip: {clip.ClipNumber}; Path: {clip.DatFilePath}; Reason: {validation.Message}");
+                    continue;
+                }
+
+                var outputFolderPath = ResolveActiveQueueOutputFolder(validation.FilePath, addSettings);
+                var outputFolderValidation = OutputFolderValidator.ValidateOutputFolder(outputFolderPath);
+                if (!outputFolderValidation.IsValid || string.IsNullOrWhiteSpace(outputFolderValidation.FolderPath))
+                {
+                    technicalLog.Append($"Storyboard clip skipped because output destination is invalid. Clip: {clip.ClipNumber}; Input: {validation.FilePath}; Output folder: {outputFolderPath}; Reason: {outputFolderValidation.Message}");
+                    continue;
+                }
+
+                var plannedOutputPath = PlanQueueOutputPath(validation.FilePath, outputFolderValidation.FolderPath, addSettings.OutputFormat);
+                if (string.IsNullOrWhiteSpace(plannedOutputPath))
+                {
+                    technicalLog.Append($"Storyboard clip skipped because no safe output path could be planned. Clip: {clip.ClipNumber}; Input: {validation.FilePath}; Output folder: {outputFolderValidation.FolderPath}");
+                    continue;
+                }
+
+                var directOutputPath = OutputPathService.GetDirectOutputPath(validation.FilePath, outputFolderValidation.FolderPath, addSettings.OutputFormat);
+                var hasExistingPlannedOutput = !string.IsNullOrWhiteSpace(directOutputPath) &&
+                                               File.Exists(directOutputPath) &&
+                                               string.Equals(directOutputPath, plannedOutputPath, StringComparison.OrdinalIgnoreCase);
+                var item = new QueueItem(
+                    validation.FilePath,
+                    plannedOutputPath,
+                    addSettings.OutputDestinationMode,
+                    addSettings.OutputDestinationMode == OutputDestinationMode.ChooseOutputFolder ? outputFolderValidation.FolderPath : null,
+                addSettings.OutputFormat,
+                addSettings.ConversionMode,
+                addSettings.Fps,
+                hasExistingPlannedOutput)
+                {
+                    StoryboardPlan = plan,
+                    StoryboardClip = clip,
+                    BurnTimestamp = addSettings.BurnTimestamp && BurnTimestampMetadataBuilder.IsSupportedMode(addSettings.ConversionMode),
+                    LogicalOutputBaseName = string.IsNullOrWhiteSpace(clip.CameraDisplayName)
+                        ? clip.ClipName
+                        : clip.CameraDisplayName
+                };
+
+                var fpsResolution = ResolveQueueItemFps(validation.FilePath, addSettings);
+                item.ApplyFpsResolution(addSettings.FpsSettings, fpsResolution);
+                QueueItemStatusService.ApplyPostFpsResolutionStatus(item);
+                queueItems.Add(item);
+                addedCount++;
+                technicalLog.Append($"Queued storyboard clip. Folder: {plan.ExportFolder}; Clip: {clip.ClipNumber} of {plan.ClipCount}; Name: {clip.ClipName}; Camera: {FormatOptionalValue(clip.CameraDisplayName, "unknown")}; Input: {item.InputPath}; Output: {item.PlannedOutputPath}; Status: {item.StatusText}; FPS: {item.FpsDisplayLabel} ({item.FfmpegRateValue}).");
+                AppendQueueItemFpsTechnicalLog(item, "Storyboard queue item FPS detection");
+            }
+        }
+
+        RefreshQueueGrid();
+        if (addedCount > 0)
+        {
+            RefreshStatusLog($"Added {addedCount} storyboard clip{(addedCount == 1 ? "" : "s")} to the queue.");
+            var firstPath = storyboardPlans.SelectMany(plan => plan.Clips).OrderBy(clip => clip.ClipNumber).FirstOrDefault()?.DatFilePath;
+            if (!string.IsNullOrWhiteSpace(firstPath))
+            {
+                ApplyQueueInputPreview(firstPath);
+            }
+        }
+
+        await PreProbeWaitingQueueItemsIfIdleAsync();
+    }
+
+    private async Task AddCombinedStoryboardPlansToQueueAsync(IReadOnlyList<SpotterStoryboardPlan> storyboardPlans, QueueSettingsSnapshot addSettings)
+    {
+        var addedCount = 0;
+        foreach (var plan in storyboardPlans)
+        {
+            if (!plan.IsStrongConfidence)
+            {
+                technicalLog.Append($"Combined storyboard import skipped because the plan is not strong enough. Folder: {plan.ExportFolder}; Warnings: {string.Join("; ", plan.Warnings)}");
+                technicalLog.AppendBlock("Storyboard export technical details", plan.BuildTechnicalReport());
+                continue;
+            }
+
+            var inputPath = string.IsNullOrWhiteSpace(plan.SidecarPath) ? plan.Clips[0].DatFilePath : plan.SidecarPath;
+            var outputFolderPath = ResolveActiveQueueOutputFolder(inputPath, addSettings);
+            var outputFolderValidation = OutputFolderValidator.ValidateOutputFolder(outputFolderPath);
+            if (!outputFolderValidation.IsValid || string.IsNullOrWhiteSpace(outputFolderValidation.FolderPath))
+            {
+                technicalLog.Append($"Combined storyboard import skipped because output destination is invalid. Folder: {plan.ExportFolder}; Output folder: {outputFolderPath}; Reason: {outputFolderValidation.Message}");
+                continue;
+            }
+
+            var plannedOutputPath = PlanStoryboardOutputPath(plan, inputPath, outputFolderValidation.FolderPath, addSettings.OutputFormat);
+            if (string.IsNullOrWhiteSpace(plannedOutputPath))
+            {
+                technicalLog.Append($"Combined storyboard import skipped because no safe output path could be planned. Folder: {plan.ExportFolder}");
+                continue;
+            }
+
+            var fpsResolution = ResolveCombinedStoryboardFps(plan, addSettings.FpsSettings);
+            var item = new QueueItem(
+                inputPath,
+                plannedOutputPath,
+                addSettings.OutputDestinationMode,
+                addSettings.OutputDestinationMode == OutputDestinationMode.ChooseOutputFolder ? outputFolderValidation.FolderPath : null,
+                addSettings.OutputFormat,
+                ConversionModes.Encode,
+                addSettings.Fps,
+                hasExistingDirectOutput: false)
+            {
+                StoryboardPlan = plan,
+                IsCombinedStoryboard = true,
+                BurnTimestamp = addSettings.BurnTimestamp,
+                LogicalOutputBaseName = GetStoryboardOutputBaseName(plan),
+                CustomOutputPath = plannedOutputPath,
+                HasCustomOutputPath = true,
+                HasCustomMode = true
+            };
+            item.ApplyFpsResolution(addSettings.FpsSettings, fpsResolution);
+            QueueItemStatusService.ApplyPostFpsResolutionStatus(item);
+            if (item.Status == QueueItemStatus.WaitingForProbe)
+            {
+                item.Status = QueueItemStatus.Ready;
+                item.StatusText = "Ready";
+                item.ProgressText = "Ready";
+            }
+
+            queueItems.Add(item);
+            addedCount++;
+            technicalLog.AppendBlock("Storyboard export technical details", plan.BuildTechnicalReport());
+            technicalLog.Append("Storyboard merge uses Full encoding.");
+            technicalLog.Append($"Queued combined storyboard. Folder: {plan.ExportFolder}; Clips: {plan.ClipCount}; Output: {item.PlannedOutputPath}; Mode: Full; FPS: {item.FpsDisplayLabel} ({item.FfmpegRateValue}). Storyboard clips will be combined in storyboard order.");
+            AppendQueueItemFpsTechnicalLog(item, "Combined storyboard FPS detection");
+        }
+
+        RefreshQueueGrid();
+        if (addedCount > 0)
+        {
+            RefreshStatusLog($"Added {addedCount} combined storyboard item{(addedCount == 1 ? "" : "s")} to the queue. Storyboard merge uses Full encoding.");
+            var firstInputPath = storyboardPlans.FirstOrDefault()?.Clips.FirstOrDefault()?.DatFilePath;
+            if (!string.IsNullOrWhiteSpace(firstInputPath))
+            {
+                ApplyQueueInputPreview(firstInputPath);
+            }
+        }
+
         await PreProbeWaitingQueueItemsIfIdleAsync();
     }
 
@@ -2628,7 +3034,8 @@ public sealed class MainForm : Form
             selectionState.OutputDestinationMode,
             selectionState.OutputDestinationMode == OutputDestinationMode.ChooseOutputFolder
                 ? selectionState.ChosenOutputFolderPath
-                : null)
+                : null,
+            batchBurnTimestampCheckBox.Checked && IsBatchBurnTimestampAvailable(GetSelectedConversionMode()))
         {
             FpsSettings = GetSelectedFpsSettings()
         };
@@ -2636,12 +3043,50 @@ public sealed class MainForm : Form
 
     private static string FormatQueueSettings(QueueSettingsSnapshot settings)
     {
-        return $"Format: {settings.OutputFormat.DisplayName()} | Mode: {FormatConversionModeForDisplay(settings.ConversionMode)} | Source FPS: {settings.FpsSettings.RequestedDisplayValue}";
+        return $"Format: {settings.OutputFormat.DisplayName()} | Mode: {FormatConversionModeForDisplay(settings.ConversionMode)} | Source FPS: {settings.FpsSettings.RequestedDisplayValue} | Burn timestamp: {FormatYesNo(settings.BurnTimestamp)}";
+    }
+
+    private void ApplyBatchBurnTimestampModeUi()
+    {
+        isApplyingBatchBurnTimestampUi = true;
+        try
+        {
+        var supported = IsBatchBurnTimestampAvailable(GetSelectedConversionMode());
+        if (!supported && batchBurnTimestampCheckBox.Checked)
+        {
+            batchBurnTimestampCheckBox.Checked = false;
+        }
+
+        batchBurnTimestampCheckBox.Enabled = supported;
+        }
+        finally
+        {
+            isApplyingBatchBurnTimestampUi = false;
+        }
     }
 
     private QueueItemFpsResolution ResolveQueueItemFps(string datPath, QueueSettingsSnapshot settings)
     {
         return queueItemFpsResolver.ResolveQueueItemFps(datPath, settings.FpsSettings);
+    }
+
+    private QueueItemFpsResolution ResolveQueueItemFps(QueueItem item, QueueSettingsSnapshot settings)
+    {
+        return item.IsCombinedStoryboard && item.StoryboardPlan is not null
+            ? ResolveCombinedStoryboardFps(item.StoryboardPlan, settings.FpsSettings)
+            : queueItemFpsResolver.ResolveQueueItemFps(item.InputPath, settings.FpsSettings);
+    }
+
+    private QueueItemFpsResolution ResolveQueueItemFps(QueueItem item, QueueItemFpsSettings fpsSettings)
+    {
+        return item.IsCombinedStoryboard && item.StoryboardPlan is not null
+            ? ResolveCombinedStoryboardFps(item.StoryboardPlan, fpsSettings)
+            : queueItemFpsResolver.ResolveQueueItemFps(item.InputPath, fpsSettings);
+    }
+
+    private QueueItemFpsResolution ResolveCombinedStoryboardFps(SpotterStoryboardPlan plan, QueueItemFpsSettings fpsSettings)
+    {
+        return storyboardCombinedFpsResolver.ResolveCombinedOutputFps(plan, fpsSettings);
     }
 
     private bool TryPrepareForQueueAdd()
@@ -2654,7 +3099,7 @@ public sealed class MainForm : Form
         var clearedCount = queueItems.Count;
         queueItems.Clear();
         ResetQueueColumnAutoFitIfQueueIsEmpty();
-        ResetBatchOptionsForNewQueue();
+        ResetBatchOptionsForNewQueue("Batch Options reset to defaults after completed queue auto-clear.");
         technicalLog.Append($"Cleared completed queue before adding more files. Items cleared: {clearedCount}.");
         RefreshQueueGrid();
         RefreshDetailsText(DetailsScrollMode.Bottom);
@@ -2663,7 +3108,7 @@ public sealed class MainForm : Form
         return true;
     }
 
-    private void ResetBatchOptionsForNewQueue()
+    private void ResetBatchOptionsForNewQueue(string logMessage)
     {
         var defaults = QueueAddFlowService.CreateDefaultBatchOptionsAfterAutoClear();
         isInitializing = true;
@@ -2672,6 +3117,8 @@ public sealed class MainForm : Form
             outputFormatComboBox.SelectedItem = defaults.OutputFormat.DisplayName();
             conversionModeComboBox.SelectedItem = FormatConversionModeForDisplay(defaults.ConversionMode);
             frameRateComboBox.SelectedItem = defaults.FpsSettings.RequestedDisplayValue;
+            batchBurnTimestampCheckBox.Checked = defaults.BurnTimestamp;
+            batchBurnTimestampCheckBox.Enabled = false;
             sameFolderRadioButton.Checked = defaults.OutputDestinationMode == OutputDestinationMode.SameFolderAsSource;
             chooseFolderRadioButton.Checked = defaults.OutputDestinationMode == OutputDestinationMode.ChooseOutputFolder;
 
@@ -2688,10 +3135,11 @@ public sealed class MainForm : Form
         }
 
         ApplyOutputDestinationMode();
+        ApplyBatchBurnTimestampModeUi();
         RecalculatePlannedOutputPath();
         SaveCurrentSettings();
         UpdateConvertButtonState();
-        technicalLog.Append("Batch Options reset to defaults after completed queue auto-clear.");
+        technicalLog.Append(logMessage);
     }
 
     private string? GetDirectOutputPathForQueueRefresh(QueueItem item, string outputFolderPath, OutputFormat outputFormat)
@@ -2773,6 +3221,11 @@ public sealed class MainForm : Form
                 baseNameOverride: logicalBaseName);
         }
 
+        if (source.IsCombinedStoryboard && source.StoryboardPlan is not null)
+        {
+            return PlanStoryboardOutputPath(source.StoryboardPlan, source.InputPath, outputFolder, addSettings.OutputFormat, trimSuffix: null);
+        }
+
         return PlanAutomaticQueueOutputPath(source.InputPath, outputFolder, addSettings.OutputFormat, trimSuffix: null);
     }
 
@@ -2833,6 +3286,50 @@ public sealed class MainForm : Form
         }
 
         return null;
+    }
+
+    private string? PlanStoryboardOutputPath(SpotterStoryboardPlan plan, string inputPath, string outputFolderPath, OutputFormat outputFormat, string? trimSuffix = null)
+    {
+        var baseName = GetStoryboardOutputBaseName(plan);
+        if (!string.IsNullOrWhiteSpace(trimSuffix))
+        {
+            baseName += trimSuffix;
+        }
+        if (string.IsNullOrWhiteSpace(baseName))
+        {
+            return null;
+        }
+
+        for (var index = 0; index <= 999; index++)
+        {
+            var suffix = index == 0 ? "" : $"_{index:00}";
+            var candidate = Path.Combine(outputFolderPath, $"{baseName}{suffix}{outputFormat.Extension()}");
+            if (OutputPathService.IsSafeOutputPath(inputPath, candidate) &&
+                !File.Exists(candidate) &&
+                IsAllowedQueueOutputPath(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static string GetStoryboardOutputBaseName(SpotterStoryboardPlan plan)
+    {
+        var storyboardName = SanitizeFileNamePart(plan.StoryboardName);
+        if (!string.IsNullOrWhiteSpace(storyboardName))
+        {
+            return storyboardName;
+        }
+
+        var sidecarBaseName = SanitizeFileNamePart(Path.GetFileNameWithoutExtension(plan.SidecarPath));
+        if (!string.IsNullOrWhiteSpace(sidecarBaseName))
+        {
+            return sidecarBaseName;
+        }
+
+        return "Storyboard";
     }
 
     private static string GetSplitRecordingOutputBaseName(SpotterSplitExportPlan plan)
@@ -2931,12 +3428,16 @@ public sealed class MainForm : Form
         foreach (var item in queueItems.Where(CanApplyLockedQueueSettings).ToList())
         {
             var itemFpsSettings = item.HasCustomFpsSetting ? item.FpsSettings : settings.FpsSettings;
+            var itemConversionMode = item.HasCustomMode ? item.ConversionMode : settings.ConversionMode;
             var itemSettings = settings with
             {
                 OutputFormat = item.HasCustomFormat ? item.OutputFormat : settings.OutputFormat,
-                ConversionMode = item.HasCustomMode ? item.ConversionMode : settings.ConversionMode,
+                ConversionMode = itemConversionMode,
                 Fps = itemFpsSettings.ToManualFpsOption(),
-                FpsSettings = itemFpsSettings
+                FpsSettings = itemFpsSettings,
+                BurnTimestamp = item.HasCustomBurnTimestamp
+                    ? item.BurnTimestamp
+                    : settings.BurnTimestamp && BurnTimestampMetadataBuilder.IsSupportedMode(itemConversionMode)
             };
 
             var outputFolderPath = ResolveActiveQueueOutputFolder(item.InputPath, itemSettings);
@@ -2978,7 +3479,7 @@ public sealed class MainForm : Form
                 plannedOutputPath,
                 hasExistingPlannedOutput,
                 item.PreProbeResult is null ? "Ready" : FormatProbeProgressText(item.PreProbeResult),
-                ResolveQueueItemFps(item.InputPath, itemSettings));
+                ResolveQueueItemFps(item, itemSettings));
             item.ConversionResult = null;
             item.ResultStatusSummary = hasExistingPlannedOutput ? "Skipped - output already exists" : null;
             lockedCount++;
@@ -3074,7 +3575,7 @@ public sealed class MainForm : Form
     {
         row.Tag = item;
         SetQueueCellValue(row, "Status", item.StatusText);
-        SetQueueCellValue(row, "File", item.IsSplitRecording ? $"{Path.GetFileName(item.InputPath)} (split recording)" : Path.GetFileName(item.InputPath));
+        SetQueueCellValue(row, "File", FormatQueueFileName(item));
         SetQueueCellValue(row, "Output", item.PlannedOutputPath);
         SetQueueCellValue(row, "Format", item.OutputFormat.DisplayName());
         SetQueueCellValue(row, "Mode", FormatConversionModeForDisplay(item.ConversionMode));
@@ -3092,6 +3593,18 @@ public sealed class MainForm : Form
         {
             cell.Value = displayValue;
         }
+    }
+
+    private static string FormatQueueFileName(QueueItem item)
+    {
+        if (item.IsCombinedStoryboard)
+        {
+            return $"{item.StoryboardPlan?.StoryboardName ?? "Storyboard"} (storyboard)";
+        }
+
+        return item.IsSplitRecording
+            ? $"{Path.GetFileName(item.InputPath)} (split recording)"
+            : Path.GetFileName(item.InputPath);
     }
 
     private static void ApplyQueueGridRowStyle(DataGridViewRow row, QueueItem item)
@@ -3271,7 +3784,7 @@ public sealed class MainForm : Form
         duplicateSelectedQueueItemButton.Enabled = allowQueueEditing &&
                                                    selectedCopyItem is not null &&
                                                    CanCopyQueueItemForState(selectedCopyItem, isQueueProcessing);
-        clearCompletedQueueButton.Enabled = allowQueueEditing && queueItems.Any(item => item.Status == QueueItemStatus.Completed);
+        clearCompletedQueueButton.Enabled = allowQueueEditing && CanClearQueueForState(queueItems.Count, isQueueProcessing);
     }
 
     private async Task StartQueueAsync()
@@ -3489,40 +4002,56 @@ public sealed class MainForm : Form
         technicalLog.Append($"Queue item start. {ordinal} of {totalItems}; Input: {item.InputPath}; Planned output: {item.PlannedOutputPath}; Format: {item.OutputFormat.DisplayName()}; Mode: {FormatConversionModeForDisplay(item.ConversionMode)}; FPS: {item.FpsDisplayLabel} ({item.FfmpegRateValue}).");
         RefreshStatusLog($"Processing {ordinal} of {totalItems}: {fileName}");
 
-        var inputValidation = InputFileValidator.ValidateDatFile(item.InputPath);
-        if (!inputValidation.IsValid)
+        if (!item.IsCombinedStoryboard)
         {
-            SetQueueItemStatus(item, QueueItemStatus.Failed, "Failed", inputValidation.Message);
-            item.ResultStatusSummary = "Skipped - invalid output path";
-            technicalLog.Append($"Queue item failed input revalidation. Input: {item.InputPath}; Reason: {inputValidation.Message}");
-            technicalLog.Append(QueueItemResultFormatter.BuildLogLine(item, ordinal, totalItems));
-            return null;
-        }
+            var inputValidation = InputFileValidator.ValidateDatFile(item.InputPath);
+            if (!inputValidation.IsValid)
+            {
+                SetQueueItemStatus(item, QueueItemStatus.Failed, "Failed", inputValidation.Message);
+                item.ResultStatusSummary = "Skipped - invalid output path";
+                technicalLog.Append($"Queue item failed input revalidation. Input: {item.InputPath}; Reason: {inputValidation.Message}");
+                technicalLog.Append(QueueItemResultFormatter.BuildLogLine(item, ordinal, totalItems));
+                return null;
+            }
 
-        var probeResult = await probeService.ProbeRawH264Async(item.InputPath, item.Fps, cancellationToken);
-        if (cancellationToken.IsCancellationRequested)
-        {
-            var canceledResult = new ConversionResult(false, ConversionResult.CanceledMessage, ffmpegTools.FfmpegPath, Array.Empty<string>(), item.InputPath, item.PlannedOutputPath, item.Fps, null, "", "", WasCanceled: true);
-            item.ConversionResult = canceledResult;
-            SetQueueItemStatus(item, QueueItemStatus.Canceled, "Canceled", "");
-            technicalLog.Append($"Queue item canceled during probe. Input: {item.InputPath}");
-            technicalLog.Append(QueueItemResultFormatter.BuildLogLine(item, ordinal, totalItems));
-            return canceledResult;
-        }
+            var probeResult = await probeService.ProbeRawH264Async(item.InputPath, item.Fps, cancellationToken);
+            if (cancellationToken.IsCancellationRequested)
+            {
+                var canceledResult = new ConversionResult(false, ConversionResult.CanceledMessage, ffmpegTools.FfmpegPath, Array.Empty<string>(), item.InputPath, item.PlannedOutputPath, item.Fps, null, "", "", WasCanceled: true);
+                item.ConversionResult = canceledResult;
+                SetQueueItemStatus(item, QueueItemStatus.Canceled, "Canceled", "");
+                technicalLog.Append($"Queue item canceled during probe. Input: {item.InputPath}");
+                technicalLog.Append(QueueItemResultFormatter.BuildLogLine(item, ordinal, totalItems));
+                return canceledResult;
+            }
 
-        if (!probeResult.IsSuccess)
-        {
+            if (!probeResult.IsSuccess)
+            {
+                item.PreProbeResult = probeResult;
+                item.ResultStatusSummary = "Skipped - unsupported video payload";
+                SetQueueItemStatus(item, QueueItemStatus.Unsupported, "Unsupported", "Will not process");
+                technicalLog.Append($"Queue item probe failed. Input: {item.InputPath}; Message: {ProbeResult.UnsupportedMessage}");
+                technicalLog.AppendBlock("Queue item probe technical details", probeResult.TechnicalDetails);
+                technicalLog.Append(QueueItemResultFormatter.BuildLogLine(item, ordinal, totalItems));
+                return null;
+            }
+
+            technicalLog.Append($"Queue item probe succeeded. Input: {item.InputPath}; Codec: {FormatOptionalValue(probeResult.CodecName, "unknown")}; Resolution: {FormatResolution(probeResult.Width, probeResult.Height)}; Duration: {FormatOptionalValue(probeResult.Duration, "unknown")}.");
             item.PreProbeResult = probeResult;
-            item.ResultStatusSummary = "Skipped - unsupported video payload";
-            SetQueueItemStatus(item, QueueItemStatus.Unsupported, "Unsupported", "Will not process");
-            technicalLog.Append($"Queue item probe failed. Input: {item.InputPath}; Message: {ProbeResult.UnsupportedMessage}");
-            technicalLog.AppendBlock("Queue item probe technical details", probeResult.TechnicalDetails);
-            technicalLog.Append(QueueItemResultFormatter.BuildLogLine(item, ordinal, totalItems));
-            return null;
         }
+        else
+        {
+            if (item.StoryboardPlan is null || !item.StoryboardPlan.IsStrongConfidence)
+            {
+                SetQueueItemStatus(item, QueueItemStatus.Failed, "Failed", "Storyboard invalid");
+                item.ResultStatusSummary = "Skipped - invalid storyboard";
+                technicalLog.Append($"Combined storyboard item failed validation. Input: {item.InputPath}");
+                technicalLog.Append(QueueItemResultFormatter.BuildLogLine(item, ordinal, totalItems));
+                return null;
+            }
 
-        technicalLog.Append($"Queue item probe succeeded. Input: {item.InputPath}; Codec: {FormatOptionalValue(probeResult.CodecName, "unknown")}; Resolution: {FormatResolution(probeResult.Width, probeResult.Height)}; Duration: {FormatOptionalValue(probeResult.Duration, "unknown")}.");
-        item.PreProbeResult = probeResult;
+                technicalLog.Append($"Combined storyboard validation succeeded. Clips: {item.StoryboardPlan.ClipCount}; Metadata file: {item.StoryboardPlan.SidecarPath}");
+        }
 
         var outputSafety = RecheckQueueOutputSafety(item);
         if (!outputSafety.CanConvert)
@@ -3542,7 +4071,10 @@ public sealed class MainForm : Form
             item.PlannedOutputPath = outputSafety.OutputPath!;
         }
 
-        var duration = item.IsSplitRecording ? null : ParseProbeDuration(probeResult.Duration);
+        var storyboardTimeline = item.IsCombinedStoryboard ? RecordingTimelineBuilder.Build(item) : null;
+        var duration = item.IsCombinedStoryboard
+            ? storyboardTimeline?.TotalDuration
+            : item.IsSplitRecording ? null : ParseProbeDuration(item.PreProbeResult?.Duration);
         var hasDuration = duration.HasValue && duration.Value > TimeSpan.Zero;
         var effectiveDuration = item.TrimRange is null ? duration : item.TrimRange.End - item.TrimRange.Start;
         var hasEffectiveDuration = effectiveDuration.HasValue && effectiveDuration.Value > TimeSpan.Zero;
@@ -3566,7 +4098,9 @@ public sealed class MainForm : Form
         }
         else
         {
-            conversionResult = item.IsSplitRecording
+            conversionResult = item.IsCombinedStoryboard && item.StoryboardPlan is not null
+                ? await conversionService.EncodeCombinedStoryboardAsync(item.StoryboardPlan, item.PlannedOutputPath, item.OutputFormat, item.Fps, effectiveDuration, item.TrimRange, progress, cancellationToken, metadata)
+                : item.IsSplitRecording
                 ? await ConvertSplitRecordingQueueItemAsync(item, duration, cancellationToken, metadata, burnTimestamp, progress)
                 : item.TrimRange is not null
                     ? ConversionModes.IsNvenc(item.ConversionMode)
@@ -3583,7 +4117,7 @@ public sealed class MainForm : Form
                         : await conversionService.RemuxAsync(item.InputPath, item.PlannedOutputPath, item.OutputFormat, item.Fps, duration, progress, cancellationToken, metadata);
         }
 
-        conversionResult = EnrichConversionTelemetry(conversionResult, probeResult, item);
+        conversionResult = EnrichConversionTelemetry(conversionResult, item.PreProbeResult, item);
         item.ConversionResult = conversionResult;
         AppendConversionResultToLog(conversionResult, includeStatusSummary: false);
 
@@ -3909,7 +4443,7 @@ public sealed class MainForm : Form
 
     private QueueOutputSafetyResult RecheckQueueOutputSafety(QueueItem item)
     {
-        if (!string.IsNullOrWhiteSpace(item.CustomOutputPath))
+        if (item.HasUserCustomOutputPath && !string.IsNullOrWhiteSpace(item.CustomOutputPath))
         {
             var customValidation = OutputPathService.ValidateCustomOutputPath(
                 item.InputPath,
@@ -4047,7 +4581,8 @@ public sealed class MainForm : Form
         }
         else
         {
-            if (string.Equals(progress.Summary, "Preparing selected trim...", StringComparison.Ordinal))
+            if (progress.IsIndeterminate ||
+                string.Equals(progress.Summary, "Preparing selected trim...", StringComparison.Ordinal))
             {
                 conversionProgressBar.Style = ProgressBarStyle.Marquee;
                 conversionProgressBar.MarqueeAnimationSpeed = 30;
@@ -4482,7 +5017,7 @@ public sealed class MainForm : Form
                 ClientSize = new Size(ClientSize.Width, ClientSize.Height + detailsHeight);
                 EnsureWindowVisible();
                 areDetailsVisible = true;
-                showDetailsButton.Text = "Hide Details";
+                showDetailsButton.Text = "Hide Log";
                 SetDetailsText(BuildDetailsText(), DetailsScrollMode.Bottom);
             }
             else
@@ -4490,7 +5025,7 @@ public sealed class MainForm : Form
                 var detailsHeight = GetCurrentDetailsRowHeight();
                 var collapsedClientSize = detailsCollapsedClientSize ?? new Size(ClientSize.Width, ClientSize.Height - detailsHeight);
                 areDetailsVisible = false;
-                showDetailsButton.Text = "Show Details";
+                showDetailsButton.Text = "Show Log";
 
                 if (detailsPanel is not null)
                 {
@@ -5003,6 +5538,19 @@ public sealed class MainForm : Form
         lines.Add($"FFmpeg FPS value: {(item.RequiresManualFpsSelection || !item.HasResolvedFps ? "Not set" : item.FfmpegRateValue)}");
         lines.Add($"FPS confidence: {FormatOptionalValue(item.RequiresManualFpsSelection || !item.HasResolvedFps ? "Unavailable" : item.FpsConfidence, "Unknown")}");
         lines.Add($"FPS note: {FormatQueueItemFpsNote(item)}");
+        if (item.IsCombinedStoryboard && item.StoryboardPlan is not null)
+        {
+            lines.Add("Source type: Storyboard");
+            lines.Add($"Parts: {item.StoryboardPlan.ClipCount} clips");
+            lines.Add("Storyboard clips will be combined in storyboard order.");
+        }
+        else if (item.StoryboardClip is not null)
+        {
+            lines.Add("Source type: Storyboard clip");
+            lines.Add($"Storyboard clip: {item.StoryboardClip.ClipName} ({item.StoryboardClip.ClipNumber} of {item.StoryboardPlan?.ClipCount ?? 0})");
+            lines.Add($"Camera: {FormatOptionalValue(item.StoryboardClip.CameraDisplayName, "Unknown")}");
+        }
+
         lines.Add($"Export segment: {item.MultiFileExportContext?.DisplayText ?? "None detected"}");
 
         if (item.PreProbeResult is not null)
@@ -5336,7 +5884,6 @@ public sealed class MainForm : Form
 
     private void CompleteDeferredStartupUiWork()
     {
-        LoadHeaderLogoIfAvailable();
         RegisterQueueDeselectHandlers(this);
         ApplyQueueAutoFitColumnWidths();
         ApplyMinimumUsableWindowSize();
@@ -5373,7 +5920,6 @@ public sealed class MainForm : Form
         var height =
             rootLayout?.Padding.Vertical ?? 0;
 
-        height += 44;
         height += FileSelectionRowHeight;
         height += GetBatchOptionsMinimumHeight();
         height += 34;
@@ -5388,7 +5934,7 @@ public sealed class MainForm : Form
 
     private int GetBatchOptionsMinimumHeight()
     {
-        if (rootLayout?.GetControlFromPosition(0, 2) is { } optionsPanel)
+        if (rootLayout?.GetControlFromPosition(0, 1) is { } optionsPanel)
         {
             return Math.Max(MinimumBatchOptionsRowHeight, optionsPanel.MinimumSize.Height);
         }
@@ -5487,22 +6033,6 @@ public sealed class MainForm : Form
         return $"{control.GetType().Name} {name}{text}";
     }
 
-    private void LoadHeaderLogoIfAvailable()
-    {
-        if (headerLogoPictureBox is null || headerLogoPictureBox.Image is not null)
-        {
-            return;
-        }
-
-        var logoImage = TryLoadHeaderLogo();
-        if (logoImage is null)
-        {
-            return;
-        }
-
-        headerLogoPictureBox.Image = logoImage;
-    }
-
     private Control BuildLayout()
     {
         var root = new TableLayoutPanel
@@ -5510,9 +6040,8 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             Padding = new Padding(12),
             ColumnCount = 1,
-            RowCount = 10
+            RowCount = 9
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, FileSelectionRowHeight));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
@@ -5525,55 +6054,19 @@ public sealed class MainForm : Form
         root.RowStyles.Add(detailsRowStyle);
         rootLayout = root;
 
-        root.Controls.Add(BuildHeaderPanel(), 0, 0);
-        root.Controls.Add(BuildFileSelectionPanel(), 0, 1);
-        root.Controls.Add(BuildOptionsPanel(), 0, 2);
-        root.Controls.Add(BuildQueueSettingsNotePanel(), 0, 3);
-        root.Controls.Add(queueGridView, 0, 4);
-        root.Controls.Add(BuildQueueActionPanel(), 0, 5);
-        root.Controls.Add(BuildActionPanel(), 0, 6);
-        root.Controls.Add(conversionProgressBar, 0, 7);
-        root.Controls.Add(currentStatusLabel, 0, 8);
+        root.Controls.Add(BuildFileSelectionPanel(), 0, 0);
+        root.Controls.Add(BuildOptionsPanel(), 0, 1);
+        root.Controls.Add(BuildQueueSettingsNotePanel(), 0, 2);
+        root.Controls.Add(queueGridView, 0, 3);
+        root.Controls.Add(BuildQueueActionPanel(), 0, 4);
+        root.Controls.Add(BuildActionPanel(), 0, 5);
+        root.Controls.Add(conversionProgressBar, 0, 6);
+        root.Controls.Add(currentStatusLabel, 0, 7);
         detailsPanel = BuildDetailsPanel();
         detailsPanel.Visible = false;
-        root.Controls.Add(detailsPanel, 0, 9);
+        root.Controls.Add(detailsPanel, 0, 8);
 
         return root;
-    }
-
-    private Control BuildHeaderPanel()
-    {
-        var panel = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 1,
-            Margin = new Padding(0)
-        };
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 46));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-
-        headerLogoPictureBox = new PictureBox
-        {
-            Dock = DockStyle.Fill,
-            SizeMode = PictureBoxSizeMode.Zoom,
-            Margin = new Padding(0, 2, 8, 2)
-        };
-        panel.Controls.Add(headerLogoPictureBox, 0, 0);
-
-        var headerLabel = new Label
-        {
-            AutoSize = false,
-            Dock = DockStyle.Fill,
-            Text = "DAT Converter",
-            Font = new Font(Font.FontFamily, 13F, FontStyle.Bold),
-            TextAlign = ContentAlignment.MiddleLeft,
-            Margin = new Padding(0)
-        };
-
-        panel.Controls.Add(headerLabel, 1, 0);
-        return panel;
     }
 
     private Control BuildFileSelectionPanel()
@@ -5650,19 +6143,37 @@ public sealed class MainForm : Form
             Padding = new Padding(14, 18, 14, 12)
         };
 
-        var panel = new FlowLayoutPanel
+        var panel = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            ColumnCount = 1,
+            RowCount = 2,
+            Padding = new Padding(6, 2, 0, 0)
+        };
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+        var dropdownPanel = new FlowLayoutPanel
         {
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
-            Dock = DockStyle.Fill,
+            Dock = DockStyle.Top,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
-            Padding = new Padding(6, 2, 0, 0)
+            Padding = new Padding(0)
         };
 
-        panel.Controls.Add(BuildOptionStack("Format", outputFormatComboBox, 190));
-        panel.Controls.Add(BuildOptionStack("Mode", conversionModeComboBox, 210));
-        panel.Controls.Add(BuildOptionStack("Source FPS", frameRateComboBox, 190));
+        dropdownPanel.Controls.Add(BuildOptionStack("Format", outputFormatComboBox, 190));
+        dropdownPanel.Controls.Add(BuildOptionStack("Mode", conversionModeComboBox, 210));
+        dropdownPanel.Controls.Add(BuildOptionStack("Source FPS", frameRateComboBox, 190));
+        batchBurnTimestampCheckBox.Dock = DockStyle.Top;
+        batchBurnTimestampCheckBox.MinimumSize = new Size(260, 28);
+        batchBurnTimestampCheckBox.Margin = new Padding(0, 8, 0, 0);
+
+        panel.Controls.Add(dropdownPanel, 0, 0);
+        panel.Controls.Add(batchBurnTimestampCheckBox, 0, 1);
 
         groupBox.Controls.Add(panel);
         groupBox.MinimumSize = new Size(0, GetMinimumBatchOptionsHeight(groupBox, panel));
@@ -5892,17 +6403,13 @@ public sealed class MainForm : Form
             label.MinimumSize.Height + label.Margin.Vertical + comboBox.MinimumSize.Height + comboBox.Margin.Vertical);
     }
 
-    private static int GetMinimumBatchOptionsHeight(GroupBox groupBox, FlowLayoutPanel panel)
+    private static int GetMinimumBatchOptionsHeight(GroupBox groupBox, Control panel)
     {
-        var tallestStack = panel.Controls
-            .Cast<Control>()
-            .Select(control => control.MinimumSize.Height + control.Margin.Vertical)
-            .DefaultIfEmpty(MinimumBatchOptionStackHeight)
-            .Max();
+        var contentHeight = Math.Max(panel.GetPreferredSize(new Size(Math.Max(1, panel.Width), int.MaxValue)).Height, MinimumBatchOptionStackHeight);
 
         return Math.Max(
             MinimumBatchOptionsRowHeight,
-            groupBox.Padding.Vertical + panel.Padding.Vertical + tallestStack + SystemInformation.BorderSize.Height);
+            groupBox.Padding.Vertical + contentHeight + SystemInformation.BorderSize.Height);
     }
 
     private static Button CreateButton(string text)

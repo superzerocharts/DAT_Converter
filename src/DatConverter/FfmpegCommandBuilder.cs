@@ -219,6 +219,136 @@ public static class FfmpegCommandBuilder
         return arguments;
     }
 
+    public static IReadOnlyList<string> BuildStoryboardIntermediateEncodeArguments(
+        string inputPath,
+        string outputPath,
+        FpsOption sourceInputFps,
+        FpsOption finalOutputFps,
+        int canvasWidth,
+        int canvasHeight,
+        TimeSpan? localStartOffset = null,
+        TimeSpan? localDuration = null)
+    {
+        ValidateResolvedFps(sourceInputFps);
+        ValidateResolvedFps(finalOutputFps);
+
+        var arguments = new List<string>
+        {
+            "-n",
+            "-nostats",
+            "-progress",
+            "pipe:1",
+            "-fflags",
+            "+genpts+discardcorrupt",
+            "-err_detect",
+            "ignore_err",
+            "-f",
+            "h264",
+            "-r",
+            sourceInputFps.FfmpegValue,
+            "-i",
+            inputPath
+        };
+
+        if (localStartOffset.HasValue && localStartOffset.Value > TimeSpan.Zero)
+        {
+            arguments.Add("-ss");
+            arguments.Add(FormatSeconds(localStartOffset.Value));
+        }
+
+        if (localDuration.HasValue && localDuration.Value > TimeSpan.Zero)
+        {
+            arguments.Add("-t");
+            arguments.Add(FormatSeconds(localDuration.Value));
+        }
+
+        arguments.AddRange(new[]
+        {
+            "-vf",
+            $"scale={canvasWidth}:{canvasHeight}:force_original_aspect_ratio=decrease,pad={canvasWidth}:{canvasHeight}:(ow-iw)/2:(oh-ih)/2,fps={finalOutputFps.FfmpegValue},format=yuv420p",
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "22",
+            outputPath
+        });
+        return arguments;
+    }
+
+    public static IReadOnlyList<string> BuildStoryboardConcatEncodeArguments(
+        IReadOnlyList<string> segmentPaths,
+        string outputPath,
+        OutputFormat outputFormat,
+        FpsOption fps,
+        ContainerMetadata? metadata = null)
+    {
+        ValidateResolvedFps(fps);
+        if (segmentPaths.Count == 0)
+        {
+            throw new ArgumentException("At least one normalized storyboard segment is required.", nameof(segmentPaths));
+        }
+
+        var arguments = new List<string>
+        {
+            "-n",
+            "-nostats",
+            "-progress",
+            "pipe:1"
+        };
+
+        foreach (var segmentPath in segmentPaths)
+        {
+            arguments.Add("-i");
+            arguments.Add(segmentPath);
+        }
+
+        if (segmentPaths.Count == 1)
+        {
+            arguments.AddRange(new[]
+            {
+                "-filter:v",
+                $"fps={fps.FfmpegValue},format=yuv420p",
+                "-map",
+                "0:v:0"
+            });
+        }
+        else
+        {
+            var filterInputs = string.Concat(Enumerable.Range(0, segmentPaths.Count).Select(index => $"[{index}:v:0]"));
+            arguments.AddRange(new[]
+            {
+                "-filter_complex",
+                $"{filterInputs}concat=n={segmentPaths.Count}:v=1:a=0,fps={fps.FfmpegValue},format=yuv420p[v]",
+                "-map",
+                "[v]"
+            });
+        }
+
+        arguments.AddRange(new[]
+        {
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "22"
+        });
+
+        if (outputFormat.IsMp4())
+        {
+            arguments.Add("-movflags");
+            arguments.Add("+faststart");
+        }
+
+        arguments.AddRange(ContainerMetadataFormatter.BuildFfmpegArguments(metadata));
+        arguments.Add(outputPath);
+        return arguments;
+    }
+
     private static List<string> BuildEncodeBaseArguments(string inputPath, FpsOption fps)
     {
         return new List<string>

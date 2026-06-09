@@ -25,7 +25,92 @@ public static class QueueItemStatusService
             item.Status = QueueItemStatus.Warning;
             item.StatusText = "Needs FPS";
             item.ProgressText = "Choose Source FPS";
+            return;
         }
+
+        if (item.IsCombinedStoryboard)
+        {
+            ApplyCombinedStoryboardReadiness(item);
+        }
+    }
+
+    public static bool ApplyCombinedStoryboardReadiness(QueueItem item)
+    {
+        if (!item.IsCombinedStoryboard)
+        {
+            return false;
+        }
+
+        item.PreProbeResult = null;
+
+        if (item.HasExistingDirectOutput)
+        {
+            item.ResultStatusSummary = "Skipped - output already exists";
+            item.Status = QueueItemStatus.Skipped;
+            item.StatusText = "Exists";
+            item.ProgressText = "Selected output exists";
+            return true;
+        }
+
+        if (item.RequiresManualFpsSelection || !item.HasResolvedFps)
+        {
+            item.Status = QueueItemStatus.Warning;
+            item.StatusText = "Needs FPS";
+            item.ProgressText = "Choose Source FPS";
+            return true;
+        }
+
+        var validationMessage = ValidateCombinedStoryboardSources(item);
+        if (!string.IsNullOrWhiteSpace(validationMessage))
+        {
+            item.ResultStatusSummary = "Skipped - invalid storyboard";
+            item.Status = QueueItemStatus.Unsupported;
+            item.StatusText = "Unsupported";
+            item.ProgressText = validationMessage;
+            return true;
+        }
+
+        item.ResultStatusSummary = null;
+        item.Status = QueueItemStatus.Ready;
+        item.StatusText = "Ready";
+        item.ProgressText = "Ready";
+        return true;
+    }
+
+    private static string? ValidateCombinedStoryboardSources(QueueItem item)
+    {
+        var plan = item.StoryboardPlan;
+        if (plan is null || !plan.IsStrongConfidence)
+        {
+            return "Storyboard invalid";
+        }
+
+        if (plan.Clips.Count == 0)
+        {
+            return "Storyboard has no clips";
+        }
+
+        foreach (var clip in plan.Clips)
+        {
+            if (string.IsNullOrWhiteSpace(clip.DatFilePath) || !File.Exists(clip.DatFilePath))
+            {
+                return $"Missing clip {clip.ClipNumber}";
+            }
+
+            try
+            {
+                if (new FileInfo(clip.DatFilePath).Length <= 0)
+                {
+                    return $"Empty clip {clip.ClipNumber}";
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+            {
+                return $"Unreadable clip {clip.ClipNumber}";
+            }
+        }
+
+        return null;
     }
 
     public static void ApplyPreProbeResult(QueueItem item, ProbeResult probeResult)

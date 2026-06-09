@@ -41,6 +41,21 @@ Use this checklist for each DAT Converter portable release.
   - Confirm duration/timing looks correct.
   - If Microsoft players fail for both DAT Converter output and known-good MP4 controls, treat that as a local Windows player/media-stack issue.
   - If only DAT Converter Fast output fails in otherwise healthy players, preserve the failed output, capture ffprobe output for the MP4, then test Full mode.
+- Run Storyboard QA:
+  - Add a known Storyboard export folder.
+  - Verify the import dialog offers **Add Clips**, **Merge**, and **Cancel**.
+  - Verify the dialog states that Merge creates one combined video, uses Full encoding, and can take longer.
+  - Verify **Add Clips** queues clips separately.
+  - Verify **Merge** creates one playable combined output.
+  - For mixed-FPS storyboards, confirm the log shows each segment source input FPS and the final output FPS.
+  - Confirm storyboard temp files are cleaned up after success.
+  - If storyboard merge fails, confirm the log says `Storyboard temp files preserved for troubleshooting:` and points to the temp folder.
+- Run UI text QA:
+  - Confirm the Windows title bar shows the app name and version.
+  - Confirm there is no duplicate in-window `DAT Converter` header/title.
+  - Confirm the log toggle reads **Show Log** and **Hide Log**.
+  - Confirm visible user-facing text uses `metadata file` instead of `sidecar`.
+  - Confirm visible user-facing text does not mention `Mirasys`.
 
 ## Publish
 
@@ -51,6 +66,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\publish-portable.p
 - Verify `publish\DAT_Converter_Portable\DatConverter.exe` exists.
 - Verify end-user `publish\DAT_Converter_Portable\docs\README.txt` exists.
 - Verify bundled FFmpeg is present under `publish\DAT_Converter_Portable\tools\ffmpeg`.
+- Verify bundled FFmpeg license/attribution files are present under `publish\DAT_Converter_Portable\tools\ffmpeg`.
 - Verify docs are present under `publish\DAT_Converter_Portable\docs`.
 - Launch the portable app and confirm bundled FFmpeg detection.
 

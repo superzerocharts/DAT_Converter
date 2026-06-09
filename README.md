@@ -37,7 +37,7 @@ The queue processes one file at a time. You can add more files while the queue i
 - Failed or canceled output files may be renamed with a `.partial` suffix for troubleshooting.
 - The queue is limited to 100 files.
 - Non-video/helper `.dat` files are marked **Unsupported** and are not processed.
-- Technical details are hidden by default. Use **Show Details** and **Copy Log** for troubleshooting.
+- Technical log information is hidden by default. Use **Show Log** and **Copy Log** for troubleshooting.
 
 ## Queue Controls
 

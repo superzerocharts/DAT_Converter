@@ -1,5 +1,34 @@
 # Release Notes
 
+## v1.0.0-rc1
+
+DAT Converter v1.0.0-rc1 is the first release-candidate package for final manual playback/conversion QA.
+
+### Package
+
+- Package: `DAT_Converter_Portable.zip`
+- SHA-256: `7F54DEA783AE512EA4B6225F95EAAFB2353AEF37B72C244072DF8B5BA6CB796D`
+- Portable app includes `DatConverter.exe`, bundled `ffmpeg.exe` / `ffprobe.exe`, FFmpeg license/readme files, README, and third-party notices.
+- The app uses bundled FFmpeg tools from `tools\ffmpeg` and does not depend on system `PATH`.
+
+### QA Summary
+
+- Build passed.
+- Tests passed: 460 passed.
+- Portable publish succeeded with `scripts\publish-portable.ps1`.
+- Portable launch smoke passed.
+- Package audit confirmed required runtime files are present and source/test/dev artifacts are excluded.
+
+### Storyboard Support
+
+- Storyboard folder import can add clips separately or merge them into one combined output.
+- Storyboard merge uses storyboard-order trim planning, mixed-camera segment handling, mixed 20/30 FPS source clip normalization, segment ffprobe validation, and explicit final merge inputs.
+- Known limitation: storyboard merge uses Full encoding and can take longer.
+
+### Final Gate
+
+- Manual playback/conversion QA remains the final human gate before promoting RC1.
+
 ## v0.2.0
 
 DAT Converter v0.2.0 is the first queue-capable portable build.
@@ -30,7 +59,7 @@ DAT Converter v0.2.0 is the first queue-capable portable build.
 - Existing outputs are never overwritten.
 - Existing `.partial` files are never overwritten.
 - Files with existing output paths are marked Exists until the user chooses a new Save As path.
-- Technical details are hidden by default and available through **Show Details** / **Copy Log**.
+- Technical log information is hidden by default and available through **Show Log** / **Copy Log**.
 
 ### Known Limitations
 

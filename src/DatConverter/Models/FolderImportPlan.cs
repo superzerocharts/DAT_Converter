@@ -8,6 +8,12 @@ public sealed class FolderImportPlan
 
     public int SplitRecordingCount => Items.Count(item => item.Kind == FolderImportPlanItemKind.SplitRecording);
 
+    public int StoryboardExportCount => Items.Count(item => item.Kind == FolderImportPlanItemKind.StoryboardExport);
+
+    public int StoryboardClipCount => Items
+        .Where(item => item.Kind == FolderImportPlanItemKind.StoryboardExport)
+        .Sum(item => item.StoryboardPlan?.ClipCount ?? item.DatPaths.Count);
+
     public int SplitRecordingPartCount => Items
         .Where(item => item.Kind == FolderImportPlanItemKind.SplitRecording)
         .Sum(item => item.SplitExportPlan?.SegmentCount ?? item.DatPaths.Count);
@@ -26,5 +32,10 @@ public sealed class FolderImportPlan
     public IReadOnlyList<SpotterSplitExportPlan> RecommendedSplitPlans => Items
         .Where(item => item.Kind == FolderImportPlanItemKind.SplitRecording && item.SplitExportPlan is not null)
         .Select(item => item.SplitExportPlan!)
+        .ToList();
+
+    public IReadOnlyList<SpotterStoryboardPlan> RecommendedStoryboardPlans => Items
+        .Where(item => item.Kind == FolderImportPlanItemKind.StoryboardExport && item.StoryboardPlan is not null)
+        .Select(item => item.StoryboardPlan!)
         .ToList();
 }

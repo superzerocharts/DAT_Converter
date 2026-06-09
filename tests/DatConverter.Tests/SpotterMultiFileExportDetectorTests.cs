@@ -62,7 +62,7 @@ public sealed class SpotterMultiFileExportDetectorTests
         var result = new SpotterMultiFileExportDetector().Detect(datPath);
 
         Assert.Null(result.Context);
-        Assert.Contains("sidecar could not be read", result.TechnicalLogText);
+        Assert.Contains("metadata file could not be read", result.TechnicalLogText);
     }
 
     [Fact]

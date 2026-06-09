@@ -14,6 +14,8 @@ public sealed class SelectedItemDetailsFormatterTests
         "FPS note",
         "Source type",
         "Parts",
+        "Storyboard clip",
+        "Camera",
         "Export segment",
         "Split recording segments",
         "Trim",
@@ -179,6 +181,33 @@ public sealed class SelectedItemDetailsFormatterTests
         Assert.Contains("Source type: Split recording", lines);
         Assert.Contains("Parts: 2", lines);
         Assert.Contains("Split recording segments: dvrfile00000001.dat, dvrfile00000002.dat", lines);
+    }
+
+    [Fact]
+    public void BuildLines_StoryboardClip_ShowsClipAndCamera()
+    {
+        var item = CreateItem("dvrfile00000001.dat", "dvrfile00000001.mp4");
+        item.StoryboardPlan = new SpotterStoryboardPlan
+        {
+            Clips =
+            [
+                new SpotterStoryboardClip
+                {
+                    ClipNumber = 1,
+                    ClipName = "Clip 1",
+                    DatFileName = "dvrfile00000001.dat",
+                    DatFilePath = item.InputPath,
+                    CameraDisplayName = "2161 Empire 1A"
+                }
+            ]
+        };
+        item.StoryboardClip = item.StoryboardPlan.Clips[0];
+
+        var lines = SelectedItemDetailsFormatter.BuildLines(item);
+
+        Assert.Contains("Source type: Storyboard clip", lines);
+        Assert.Contains("Storyboard clip: Clip 1 (1 of 1)", lines);
+        Assert.Contains("Camera: 2161 Empire 1A", lines);
     }
 
     [Fact]

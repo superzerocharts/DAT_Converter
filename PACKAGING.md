@@ -61,6 +61,6 @@ Before publishing a release, verify the current queue workflow:
 - Existing matching MP4/MKV outputs are skipped by default.
 - Existing outputs and existing `.partial` files are never overwritten.
 - Source `.dat` files are never modified, renamed, deleted, or opened for writing.
-- Technical details are hidden by default and available with **Show Details** / **Copy Log**.
+- Technical log information is hidden by default and available with **Show Log** / **Copy Log**.
 
 After publishing, inspect `publish\DAT_Converter_Portable` and the release ZIP to confirm they do not contain `.dat` files, `test-assets`, source files, `.dotnet`, `.git`, `bin`, `obj`, temporary videos, or temporary `.partial` files.

@@ -18,6 +18,7 @@ public static class QueueSettingsLockService
             : null;
         item.OutputFormat = settings.OutputFormat;
         item.ConversionMode = settings.ConversionMode;
+        item.BurnTimestamp = settings.BurnTimestamp && BurnTimestampMetadataBuilder.IsSupportedMode(settings.ConversionMode);
         item.ApplyFpsResolution(
             settings.FpsSettings,
             fpsResolution ?? QueueItemFpsResolution.FromManual(settings.FpsSettings.ToManualFpsOption()));

@@ -42,6 +42,36 @@ public sealed class QueueItemContainerMetadataBuilderTests
         Assert.Contains("Trim duration: 00:03:17", metadata.Comment);
     }
 
+    [Fact]
+    public void Build_StoryboardClip_UsesClipStartAndCameraComment()
+    {
+        var item = CreateSingleItem();
+        item.StoryboardPlan = new SpotterStoryboardPlan
+        {
+            Clips =
+            [
+                new SpotterStoryboardClip
+                {
+                    ClipNumber = 1,
+                    ClipName = "Clip 1",
+                    CameraDisplayName = "2161 Empire 1A",
+                    DatFileName = Path.GetFileName(item.InputPath),
+                    DatFilePath = item.InputPath,
+                    MaterialStartTime = new DateTime(2026, 4, 11, 3, 21, 9),
+                    MaterialEndTime = new DateTime(2026, 4, 11, 3, 22, 25)
+                }
+            ]
+        };
+        item.StoryboardClip = item.StoryboardPlan.Clips[0];
+
+        var metadata = QueueItemContainerMetadataBuilder.Build(item);
+
+        Assert.Equal(new DateTime(2026, 4, 11, 3, 21, 9), metadata.CreationTime);
+        Assert.Contains("Source type: Storyboard clip", metadata.Comment);
+        Assert.Contains("Storyboard clip: 1 of 1", metadata.Comment);
+        Assert.Contains("Camera: 2161 Empire 1A", metadata.Comment);
+    }
+
     private static QueueItem CreateSingleItem()
     {
         return new QueueItem(

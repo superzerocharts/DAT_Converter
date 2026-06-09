@@ -6,6 +6,8 @@ public sealed class FolderImportPlanItem
 
     public SpotterSplitExportPlan? SplitExportPlan { get; init; }
 
+    public SpotterStoryboardPlan? StoryboardPlan { get; init; }
+
     public IReadOnlyList<string> DatPaths { get; init; } = Array.Empty<string>();
 
     public string FolderPath { get; init; } = "";

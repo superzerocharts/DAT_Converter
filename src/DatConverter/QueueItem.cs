@@ -72,6 +72,16 @@ public sealed class QueueItem
 
     public bool IsSplitRecording => SplitExportPlan?.IsStrongConfidence == true && SplitExportPlan.SegmentCount > 1;
 
+    public SpotterStoryboardPlan? StoryboardPlan { get; set; }
+
+    public SpotterStoryboardClip? StoryboardClip { get; set; }
+
+    public bool IsStoryboardClip => StoryboardPlan?.IsStoryboardExport == true && StoryboardClip is not null;
+
+    public bool IsCombinedStoryboard { get; set; }
+
+    public bool IsStoryboard => StoryboardPlan?.IsStoryboardExport == true && (StoryboardClip is not null || IsCombinedStoryboard);
+
     public string? LogicalOutputBaseName { get; set; }
 
     public TrimRange? TrimRange { get; set; }
@@ -91,6 +101,8 @@ public sealed class QueueItem
     public bool HasCustomMode { get; set; }
 
     public bool HasCustomFpsSetting { get; set; }
+
+    public bool HasCustomBurnTimestamp { get; set; }
 
     public ProbeResult? PreProbeResult { get; set; }
 
@@ -135,5 +147,6 @@ public sealed class QueueItem
         HasCustomFormat = false;
         HasCustomMode = false;
         HasCustomFpsSetting = false;
+        HasCustomBurnTimestamp = false;
     }
 }

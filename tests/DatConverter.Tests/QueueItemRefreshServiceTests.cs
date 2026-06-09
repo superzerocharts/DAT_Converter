@@ -103,6 +103,7 @@ public sealed class QueueItemRefreshServiceTests
         var customOutputPath = Path.Combine(outputFolder, "front-door.mp4");
         var item = CreateReadyItem(inputPath, customOutputPath, OutputFormat.Mp4);
         item.CustomOutputPath = customOutputPath;
+        item.HasUserCustomOutputPath = true;
 
         Refresh([item], CurrentSettings(
             OutputFormat.Mp4,
@@ -122,6 +123,7 @@ public sealed class QueueItemRefreshServiceTests
         var customOutputPath = Path.Combine(temp.Path, "front-door.mp4");
         var item = CreateReadyItem(inputPath, customOutputPath, OutputFormat.Mp4);
         item.CustomOutputPath = customOutputPath;
+        item.HasUserCustomOutputPath = true;
 
         Refresh([item], CurrentSettings(OutputFormat.Mkv));
 
@@ -381,6 +383,7 @@ public sealed class QueueItemRefreshServiceTests
         var item = CreateReadyItem(inputPath, customOutputPath, OutputFormat.Mp4);
         item.CustomOutputPath = customOutputPath;
         item.HasCustomOutputPath = true;
+        item.HasUserCustomOutputPath = true;
 
         Refresh([item], CurrentSettings(
             OutputFormat.Mp4,
@@ -406,6 +409,113 @@ public sealed class QueueItemRefreshServiceTests
         Assert.Equal(Path.Combine(temp.Path, "clip.mkv"), item.PlannedOutputPath);
     }
 
+    [Fact]
+    public void BurnTimestampRefreshesFromFullModeBatchSettings()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = CreateFile(temp.Path, "clip.dat");
+        var item = CreateReadyItem(inputPath, Path.Combine(temp.Path, "clip.mp4"), OutputFormat.Mp4);
+
+        Refresh([item], CurrentSettings(OutputFormat.Mp4, conversionMode: "Encode", burnTimestamp: true));
+
+        Assert.True(item.BurnTimestamp);
+        Assert.Equal("Encode", item.ConversionMode);
+    }
+
+    [Fact]
+    public void BurnTimestampIsClearedWhenBatchModeIsFast()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = CreateFile(temp.Path, "clip.dat");
+        var item = CreateReadyItem(inputPath, Path.Combine(temp.Path, "clip.mp4"), OutputFormat.Mp4);
+        item.BurnTimestamp = true;
+
+        Refresh([item], CurrentSettings(OutputFormat.Mp4, conversionMode: "Remux", burnTimestamp: true));
+
+        Assert.False(item.BurnTimestamp);
+    }
+
+    [Fact]
+    public void CustomBurnTimestampIsNotOverwrittenByBatchSettings()
+    {
+        using var temp = new TempDirectory();
+        var inputPath = CreateFile(temp.Path, "clip.dat");
+        var item = CreateReadyItem(inputPath, Path.Combine(temp.Path, "clip.mp4"), OutputFormat.Mp4);
+        item.ConversionMode = "Encode";
+        item.HasCustomMode = true;
+        item.BurnTimestamp = true;
+        item.HasCustomBurnTimestamp = true;
+
+        Refresh([item], CurrentSettings(OutputFormat.Mp4, conversionMode: "Encode", burnTimestamp: false));
+
+        Assert.True(item.BurnTimestamp);
+    }
+
+    [Fact]
+    public void CombinedStoryboardRefreshReturnsReadyWithoutNormalDatProbe()
+    {
+        using var temp = new TempDirectory();
+        var item = CreateCombinedStoryboardItem(temp.Path);
+        item.Status = QueueItemStatus.WaitingForProbe;
+        item.StatusText = QueueItemStatusText.CheckingFile;
+        item.PreProbeResult = null;
+
+        Refresh([item], CurrentSettings(OutputFormat.Mp4, conversionMode: "Encode"));
+
+        Assert.Equal(QueueItemStatus.Ready, item.Status);
+        Assert.Equal("Ready", item.StatusText);
+        Assert.Equal("Ready", item.ProgressText);
+        Assert.Null(item.PreProbeResult);
+    }
+
+    [Fact]
+    public void CombinedStoryboardRefreshMarksExistingOutputExists()
+    {
+        using var temp = new TempDirectory();
+        var item = CreateCombinedStoryboardItem(temp.Path);
+        File.WriteAllText(item.PlannedOutputPath, "existing output");
+
+        Refresh([item], CurrentSettings(OutputFormat.Mp4, conversionMode: "Encode"));
+
+        Assert.True(item.HasExistingDirectOutput);
+        Assert.Equal(QueueItemStatus.Skipped, item.Status);
+        Assert.Equal("Exists", item.StatusText);
+        Assert.Equal("Selected output exists", item.ProgressText);
+    }
+
+    [Fact]
+    public void CombinedStoryboardRefreshMarksMissingClipUnsupported()
+    {
+        using var temp = new TempDirectory();
+        var item = CreateCombinedStoryboardItem(temp.Path, createClipFile: false);
+
+        Refresh([item], CurrentSettings(OutputFormat.Mp4, conversionMode: "Encode"));
+
+        Assert.Equal(QueueItemStatus.Unsupported, item.Status);
+        Assert.Equal("Unsupported", item.StatusText);
+        Assert.Equal("Missing clip 1", item.ProgressText);
+    }
+
+    [Fact]
+    public void CombinedStoryboardRefreshPreservesTrimAwarePlannedOutputPath()
+    {
+        using var temp = new TempDirectory();
+        var item = CreateCombinedStoryboardItem(temp.Path);
+        var trimAwareOutputPath = Path.Combine(temp.Path, "Storyboard_trim_260411_0341-260411_0343.mp4");
+        item.TrimRange = new TrimRange(TimeSpan.FromSeconds(1200), TimeSpan.FromSeconds(1300));
+        item.PlannedOutputPath = trimAwareOutputPath;
+        item.CustomOutputPath = trimAwareOutputPath;
+        item.HasCustomOutputPath = true;
+        item.HasUserCustomOutputPath = false;
+
+        Refresh([item], CurrentSettings(OutputFormat.Mp4, conversionMode: "Encode"));
+
+        Assert.Equal(trimAwareOutputPath, item.PlannedOutputPath);
+        Assert.Equal(trimAwareOutputPath, item.CustomOutputPath);
+        Assert.False(item.HasUserCustomOutputPath);
+        Assert.Equal(QueueItemStatus.Ready, item.Status);
+    }
+
     private static QueueRefreshResult Refresh(
         IReadOnlyList<QueueItem> items,
         QueueSettingsSnapshot settings,
@@ -424,7 +534,7 @@ public sealed class QueueItemRefreshServiceTests
 
     private static string? PlanQueueOutputPath(IReadOnlyList<QueueItem> items, QueueItem item, string outputFolderPath, OutputFormat outputFormat)
     {
-        if (!string.IsNullOrWhiteSpace(item.CustomOutputPath))
+        if (item.HasUserCustomOutputPath && !string.IsNullOrWhiteSpace(item.CustomOutputPath))
         {
             var customValidation = OutputPathService.ValidateCustomOutputPath(
                 item.InputPath,
@@ -443,6 +553,14 @@ public sealed class QueueItemRefreshServiceTests
                 : null;
         }
 
+        if (item.IsCombinedStoryboard &&
+            !string.IsNullOrWhiteSpace(item.PlannedOutputPath) &&
+            OutputPathService.IsSafeOutputPath(item.InputPath, item.PlannedOutputPath) &&
+            (IsAvailable(items, item, item.PlannedOutputPath) || File.Exists(item.PlannedOutputPath)))
+        {
+            return item.PlannedOutputPath;
+        }
+
         var directOutputPath = OutputPathService.GetDirectOutputPath(item.InputPath, outputFolderPath, outputFormat);
         if (string.IsNullOrWhiteSpace(directOutputPath))
         {
@@ -459,7 +577,7 @@ public sealed class QueueItemRefreshServiceTests
 
     private static string? GetDirectOutputPath(QueueItem item, string outputFolderPath, OutputFormat outputFormat)
     {
-        if (!string.IsNullOrWhiteSpace(item.CustomOutputPath))
+        if (item.HasUserCustomOutputPath && !string.IsNullOrWhiteSpace(item.CustomOutputPath))
         {
             var customValidation = OutputPathService.ValidateCustomOutputPath(
                 item.InputPath,
@@ -499,6 +617,48 @@ public sealed class QueueItemRefreshServiceTests
         };
     }
 
+    private static QueueItem CreateCombinedStoryboardItem(string folder, bool createClipFile = true)
+    {
+        var sidecarPath = CreateFile(folder, "Storyboard.sef2");
+        var clipPath = Path.Combine(folder, "clip1.dat");
+        if (createClipFile)
+        {
+            File.WriteAllText(clipPath, "payload");
+        }
+
+        return new QueueItem(
+            sidecarPath,
+            Path.Combine(folder, "Storyboard.mp4"),
+            OutputDestinationMode.SameFolderAsSource,
+            null,
+            OutputFormat.Mp4,
+            "Encode",
+            FpsOption.FromLabel("30"),
+            hasExistingDirectOutput: false)
+        {
+            IsCombinedStoryboard = true,
+            StoryboardPlan = new SpotterStoryboardPlan
+            {
+                ExportFolder = folder,
+                SidecarPath = sidecarPath,
+                StoryboardName = "Storyboard",
+                Clips =
+                [
+                    new SpotterStoryboardClip
+                    {
+                        ClipNumber = 1,
+                        ClipName = "Clip 1",
+                        DatFileName = Path.GetFileName(clipPath),
+                        DatFilePath = clipPath
+                    }
+                ]
+            },
+            CustomOutputPath = Path.Combine(folder, "Storyboard.mp4"),
+            HasCustomOutputPath = true,
+            HasCustomMode = true
+        };
+    }
+
     private static QueueItemFpsResolution UnresolvedAutoFps()
     {
         return new QueueItemFpsResolution
@@ -520,14 +680,16 @@ public sealed class QueueItemRefreshServiceTests
         string conversionMode = "Remux",
         FpsOption? fps = null,
         OutputDestinationMode outputDestinationMode = OutputDestinationMode.SameFolderAsSource,
-        string? chosenOutputFolder = null)
+        string? chosenOutputFolder = null,
+        bool burnTimestamp = false)
     {
         return new QueueSettingsSnapshot(
             outputFormat,
             conversionMode,
             fps ?? FpsOption.FromLabel("30"),
             outputDestinationMode,
-            chosenOutputFolder);
+            chosenOutputFolder,
+            burnTimestamp);
     }
 
     private static string CreateFile(string folderPath, string fileName)

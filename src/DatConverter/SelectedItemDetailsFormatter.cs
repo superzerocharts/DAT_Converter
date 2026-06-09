@@ -24,6 +24,8 @@ public static class SelectedItemDetailsFormatter
             FormatField("FPS note", FormatFpsNote(item)),
             FormatField("Source type", FormatSourceType(item)),
             FormatField("Parts", FormatParts(item)),
+            FormatField("Storyboard clip", FormatStoryboardClip(item)),
+            FormatField("Camera", FormatStoryboardCamera(item)),
             FormatField("Export segment", FormatExportSegment(item)),
             FormatField("Split recording segments", FormatSplitSegments(item)),
             FormatField("Trim", TrimRangeFormatter.FormatTrimState(item)),
@@ -150,14 +152,36 @@ public static class SelectedItemDetailsFormatter
 
     private static string FormatSourceType(QueueItem item)
     {
-        return item.IsSplitRecording ? "Split recording" : "Single DAT";
+        return item.IsCombinedStoryboard ? "Storyboard" : item.IsStoryboardClip ? "Storyboard clip" : item.IsSplitRecording ? "Split recording" : "Single DAT";
     }
 
     private static string FormatParts(QueueItem item)
     {
+        if (item.IsStoryboardClip)
+        {
+            return "1";
+        }
+
+        if (item.IsCombinedStoryboard)
+        {
+            return $"{item.StoryboardPlan?.ClipCount ?? 0} clips";
+        }
+
         return item.IsSplitRecording
             ? item.SplitExportPlan!.SegmentCount.ToString(System.Globalization.CultureInfo.InvariantCulture)
             : "1";
+    }
+
+    private static string FormatStoryboardClip(QueueItem item)
+    {
+        return item.StoryboardClip is null
+            ? item.IsCombinedStoryboard ? $"Combined storyboard ({item.StoryboardPlan?.ClipCount ?? 0} clips)" : "None"
+            : $"{item.StoryboardClip.ClipName} ({item.StoryboardClip.ClipNumber} of {item.StoryboardPlan?.ClipCount ?? 0})";
+    }
+
+    private static string FormatStoryboardCamera(QueueItem item)
+    {
+        return item.StoryboardClip?.CameraDisplayName ?? "Unknown";
     }
 
     private static string FormatSplitSegments(QueueItem item)

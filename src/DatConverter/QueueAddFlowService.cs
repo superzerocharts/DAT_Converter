@@ -14,7 +14,8 @@ public static class QueueAddFlowService
             "Remux",
             FpsOption.FromLabel("30"),
             OutputDestinationMode.SameFolderAsSource,
-            null)
+            null,
+            BurnTimestamp: false)
         {
             FpsSettings = QueueItemFpsSettings.AutoDetect()
         };

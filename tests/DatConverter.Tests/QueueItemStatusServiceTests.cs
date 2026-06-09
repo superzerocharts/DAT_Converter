@@ -67,6 +67,46 @@ public sealed class QueueItemStatusServiceTests
     }
 
     [Fact]
+    public void ApplyCombinedStoryboardReadiness_MarksValidResolvedStoryboardReadyWithoutProbe()
+    {
+        using var temp = new TempDirectory();
+        var item = CreateCombinedStoryboardItem(temp.Path);
+
+        Assert.True(QueueItemStatusService.ApplyCombinedStoryboardReadiness(item));
+
+        Assert.Null(item.PreProbeResult);
+        Assert.Equal(QueueItemStatus.Ready, item.Status);
+        Assert.Equal("Ready", item.StatusText);
+        Assert.Equal("Ready", item.ProgressText);
+    }
+
+    [Fact]
+    public void ApplyCombinedStoryboardReadiness_MarksMissingClipUnsupported()
+    {
+        using var temp = new TempDirectory();
+        var item = CreateCombinedStoryboardItem(temp.Path, createClipFile: false);
+
+        QueueItemStatusService.ApplyCombinedStoryboardReadiness(item);
+
+        Assert.Equal(QueueItemStatus.Unsupported, item.Status);
+        Assert.Equal("Unsupported", item.StatusText);
+        Assert.Equal("Missing clip 1", item.ProgressText);
+    }
+
+    [Fact]
+    public void ApplyCombinedStoryboardReadiness_PrioritizesExistingOutput()
+    {
+        using var temp = new TempDirectory();
+        var item = CreateCombinedStoryboardItem(temp.Path, hasExistingDirectOutput: true);
+
+        QueueItemStatusService.ApplyCombinedStoryboardReadiness(item);
+
+        Assert.Equal(QueueItemStatus.Skipped, item.Status);
+        Assert.Equal("Exists", item.StatusText);
+        Assert.Equal("Selected output exists", item.ProgressText);
+    }
+
+    [Fact]
     public void ApplyPreProbeResult_PrioritizesExistingOutputOverUnresolvedFpsWhenProbeSucceeds()
     {
         var item = CreateItem(hasExistingDirectOutput: true);
@@ -92,6 +132,46 @@ public sealed class QueueItemStatusServiceTests
             hasExistingDirectOutput);
     }
 
+    private static QueueItem CreateCombinedStoryboardItem(string folder, bool createClipFile = true, bool hasExistingDirectOutput = false)
+    {
+        var sidecarPath = Path.Combine(folder, "Storyboard.sef2");
+        File.WriteAllText(sidecarPath, "<archive2 />");
+        var clipPath = Path.Combine(folder, "clip1.dat");
+        if (createClipFile)
+        {
+            File.WriteAllText(clipPath, "payload");
+        }
+
+        return new QueueItem(
+            sidecarPath,
+            Path.Combine(folder, "Storyboard.mp4"),
+            OutputDestinationMode.SameFolderAsSource,
+            null,
+            OutputFormat.Mp4,
+            "Encode",
+            FpsOption.FromLabel("30"),
+            hasExistingDirectOutput)
+        {
+            IsCombinedStoryboard = true,
+            StoryboardPlan = new SpotterStoryboardPlan
+            {
+                ExportFolder = folder,
+                SidecarPath = sidecarPath,
+                Clips =
+                [
+                    new SpotterStoryboardClip
+                    {
+                        ClipNumber = 1,
+                        ClipName = "Clip 1",
+                        DatFileName = Path.GetFileName(clipPath),
+                        DatFilePath = clipPath
+                    }
+                ]
+            },
+            PreProbeResult = new ProbeResult(true, "stale", "ffprobe", FpsOption.FromLabel("30"))
+        };
+    }
+
     private static QueueItemFpsResolution UnresolvedAutoFps()
     {
         return new QueueItemFpsResolution
@@ -104,5 +184,27 @@ public sealed class QueueItemStatusServiceTests
             RequiresManualFpsSelection = true,
             Confidence = "Unavailable"
         };
+    }
+
+    private sealed class TempDirectory : IDisposable
+    {
+        public TempDirectory()
+        {
+            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "DatConverter.Tests." + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public void Dispose()
+        {
+            try
+            {
+                Directory.Delete(Path, recursive: true);
+            }
+            catch
+            {
+            }
+        }
     }
 }

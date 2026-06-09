@@ -31,6 +31,40 @@ public sealed class BurnTimestampMetadataBuilderTests
     }
 
     [Fact]
+    public void Build_WithStoryboardCameraDisplayName_PrefersStoryboardCameraDisplayName()
+    {
+        var item = new QueueItem(
+            @"C:\video\dvrfile00000001.dat",
+            @"C:\video\dvrfile00000001.mp4",
+            OutputDestinationMode.SameFolderAsSource,
+            null,
+            OutputFormat.Mp4,
+            "Encode",
+            FpsOption.FromLabel("30"),
+            hasExistingDirectOutput: false)
+        {
+            BurnTimestamp = true,
+            StoryboardClip = new SpotterStoryboardClip
+            {
+                ClipNumber = 1,
+                ClipName = "Clip 1",
+                CameraDisplayName = "2161 Empire 1A",
+                DatFileName = "dvrfile00000001.dat",
+                DatFilePath = @"C:\video\dvrfile00000001.dat",
+                MaterialStartTime = new DateTime(2026, 4, 11, 3, 21, 9),
+                MaterialEndTime = new DateTime(2026, 4, 11, 3, 22, 25)
+            }
+        };
+        var timeline = RecordingTimelineBuilder.Build(item);
+
+        var options = BurnTimestampMetadataBuilder.Build(item, timeline);
+
+        Assert.NotNull(options);
+        Assert.Equal("2161 Empire 1A", options.CameraName);
+        Assert.Equal(new DateTime(2026, 4, 11, 3, 21, 9), options.StartTime);
+    }
+
+    [Fact]
     public void Build_WithSplitCameraDisplayName_FfmpegDrawtextUsesCameraDisplayName()
     {
         var item = CreateSplitItem("8379 Marquee Northeast PTZ");

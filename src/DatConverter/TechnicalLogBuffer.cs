@@ -58,6 +58,30 @@ public sealed class TechnicalLogBuffer
         return Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
     }
 
+    public static string GetAppDisplayVersion()
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        var informationalVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+        var versionText = string.IsNullOrWhiteSpace(informationalVersion)
+            ? assembly.GetName().Version?.ToString()
+            : informationalVersion;
+
+        if (string.IsNullOrWhiteSpace(versionText))
+        {
+            return "unknown";
+        }
+
+        versionText = versionText.Split('+', 2)[0];
+        if (Version.TryParse(versionText, out var version))
+        {
+            return version.Revision <= 0
+                ? $"{version.Major}.{version.Minor}.{version.Build}"
+                : version.ToString();
+        }
+
+        return versionText;
+    }
+
     private void TrimIfNeeded()
     {
         while (entries.Count > 0 && Text.Length > maxCharacters)

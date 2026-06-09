@@ -4,5 +4,6 @@ public enum ConversionInputPathMode
 {
     StandardWholeDatRawH264,
     CleanExtractedH264,
-    TrimmedCleanH264
+    TrimmedCleanH264,
+    StoryboardCombinedCleanH264
 }

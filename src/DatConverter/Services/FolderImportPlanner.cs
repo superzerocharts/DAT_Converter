@@ -3,15 +3,26 @@ namespace DatConverter;
 public sealed class FolderImportPlanner
 {
     private readonly Func<string, SpotterSplitExportPlan> buildSplitPlan;
+    private readonly Func<string, SpotterStoryboardPlan> buildStoryboardPlan;
 
     public FolderImportPlanner()
-        : this(path => new SpotterSplitExportPlanBuilder().Build(path))
+        : this(
+            path => new SpotterSplitExportPlanBuilder().Build(path),
+            path => new SpotterStoryboardExportDetector().Detect(path))
     {
     }
 
     public FolderImportPlanner(Func<string, SpotterSplitExportPlan> buildSplitPlan)
+        : this(buildSplitPlan, path => new SpotterStoryboardExportDetector().Detect(path))
+    {
+    }
+
+    public FolderImportPlanner(
+        Func<string, SpotterSplitExportPlan> buildSplitPlan,
+        Func<string, SpotterStoryboardPlan> buildStoryboardPlan)
     {
         this.buildSplitPlan = buildSplitPlan;
+        this.buildStoryboardPlan = buildStoryboardPlan;
     }
 
     public FolderImportPlan Build(IReadOnlyCollection<string> datPaths)
@@ -29,6 +40,28 @@ public sealed class FolderImportPlanner
         {
             var folder = group.Key;
             var groupPaths = group.OrderBy(path => path, StringComparer.OrdinalIgnoreCase).ToList();
+            var storyboardPlan = buildStoryboardPlan(folder);
+            if (storyboardPlan.IsStrongConfidence)
+            {
+                var storyboardPaths = storyboardPlan.Clips
+                    .Select(clip => Path.GetFullPath(clip.DatFilePath))
+                    .ToList();
+                items.Add(new FolderImportPlanItem
+                {
+                    Kind = FolderImportPlanItemKind.StoryboardExport,
+                    StoryboardPlan = storyboardPlan,
+                    DatPaths = storyboardPaths,
+                    FolderPath = folder
+                });
+
+                foreach (var remainingPath in groupPaths.Except(storyboardPaths, StringComparer.OrdinalIgnoreCase))
+                {
+                    items.Add(CreateSingleItem(folder, remainingPath));
+                }
+
+                continue;
+            }
+
             var splitPlan = buildSplitPlan(folder);
             if (splitPlan.IsStrongConfidence && splitPlan.SegmentCount > 1)
             {

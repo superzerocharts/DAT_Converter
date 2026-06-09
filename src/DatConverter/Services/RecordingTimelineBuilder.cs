@@ -6,6 +6,20 @@ public static class RecordingTimelineBuilder
 {
     public static RecordingTimeline Build(QueueItem item)
     {
+        if (item.IsCombinedStoryboard && item.StoryboardPlan is not null)
+        {
+            return FromStoryboardPlan(item.StoryboardPlan, item.InputPath);
+        }
+
+        if (item.StoryboardClip is not null)
+        {
+            return FromSingleDat(
+                item.InputPath,
+                item.StoryboardClip.EffectiveDuration,
+                item.StoryboardClip.EffectiveStartTime,
+                item.StoryboardClip.EffectiveEndTime);
+        }
+
         if (item.SplitExportPlan is not null && item.IsSplitRecording)
         {
             return FromSplitExportPlan(item.SplitExportPlan, item.InputPath);
@@ -89,6 +103,49 @@ public static class RecordingTimelineBuilder
             TotalDuration = hasUnknownDuration ? null : elapsedOffset,
             RecordingStart = timelineSegments.FirstOrDefault(segment => segment.RecordingStart.HasValue)?.RecordingStart,
             RecordingEnd = timelineSegments.LastOrDefault(segment => segment.RecordingEnd.HasValue)?.RecordingEnd
+        };
+    }
+
+    public static RecordingTimeline FromStoryboardPlan(SpotterStoryboardPlan plan, string sourcePath)
+    {
+        var orderedClips = plan.Clips
+            .OrderBy(clip => clip.ClipNumber)
+            .ToList();
+        var elapsedOffset = TimeSpan.Zero;
+        var hasUnknownDuration = false;
+        var segments = new List<RecordingTimelineSegment>(orderedClips.Count);
+
+        foreach (var clip in orderedClips)
+        {
+            var start = NormalizeRecordingTimestamp(clip.EffectiveStartTime);
+            var end = NormalizeRecordingTimestamp(clip.EffectiveEndTime);
+            var duration = ResolveDuration(clip.EffectiveDuration, start, end) ?? EstimateDatDuration(clip.DatFilePath);
+            segments.Add(new RecordingTimelineSegment
+            {
+                SourcePath = clip.DatFilePath,
+                RecordingStart = start,
+                RecordingEnd = end,
+                Duration = duration,
+                ElapsedOffset = elapsedOffset
+            });
+
+            if (duration.HasValue)
+            {
+                elapsedOffset += duration.Value;
+            }
+            else
+            {
+                hasUnknownDuration = true;
+            }
+        }
+
+        return new RecordingTimeline
+        {
+            SourcePath = sourcePath,
+            Segments = segments,
+            TotalDuration = hasUnknownDuration ? null : elapsedOffset,
+            RecordingStart = segments.FirstOrDefault(segment => segment.RecordingStart.HasValue)?.RecordingStart,
+            RecordingEnd = segments.LastOrDefault(segment => segment.RecordingEnd.HasValue)?.RecordingEnd
         };
     }
 

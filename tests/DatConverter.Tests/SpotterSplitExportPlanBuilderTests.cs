@@ -143,7 +143,7 @@ public sealed class SpotterSplitExportPlanBuilderTests
 
         Assert.False(plan.IsSplitExport);
         Assert.Equal("None", plan.Confidence);
-        Assert.Contains(plan.Warnings, warning => warning.Contains("Sidecar could not be read", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(plan.Warnings, warning => warning.Contains("Metadata file could not be read", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

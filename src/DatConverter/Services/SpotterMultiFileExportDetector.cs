@@ -29,7 +29,7 @@ public sealed class SpotterMultiFileExportDetector
         {
             return new SpotterMultiFileExportDetectionResult
             {
-                TechnicalLogText = $"Multi-file export detection could not scan sidecars near {datPath}: {ex.Message}"
+                TechnicalLogText = $"Multi-file export detection could not scan metadata files near {datPath}: {ex.Message}"
             };
         }
 
@@ -105,7 +105,7 @@ public sealed class SpotterMultiFileExportDetector
         {
             return new SidecarSegmentFileResult(
                 Array.Empty<string>(),
-                $"Multi-file export sidecar could not be read: {sidecarPath}; Error: {ex.Message}");
+                $"Multi-file export metadata file could not be read: {sidecarPath}; Error: {ex.Message}");
         }
     }
 

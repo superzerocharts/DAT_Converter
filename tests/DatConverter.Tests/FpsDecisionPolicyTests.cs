@@ -165,6 +165,73 @@ public sealed class FpsDecisionPolicyTests
         Assert.Contains(decision.Warnings, warning => warning.Contains("variable", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public void Decide_WithDominant20FpsBucketsAndSparseOutliers_Selects20()
+    {
+        var stableBuckets = Enumerable.Repeat(20, 724)
+            .Concat(Enumerable.Repeat(21, 15))
+            .Concat(Enumerable.Repeat(19, 30))
+            .Concat(new[] { 3, 4, 8, 8, 9, 9, 10, 10, 11, 12, 13, 13, 13, 13, 14, 17, 17, 18, 18, 18, 18, 18, 18 })
+            .ToArray();
+        var detection = new SpotterFpsDetectionResult
+        {
+            Succeeded = true,
+            DetectionSource = "DatFrameRecordsDefaultTimebase",
+            Confidence = "Medium",
+            TechnicalDetails = new SpotterFpsTechnicalDetails
+            {
+                FrameCount = 15657,
+                BucketCount = 792,
+                AverageFps = 19.772,
+                BucketMedianFps = 20,
+                BucketModeFps = 20,
+                BucketMinFps = stableBuckets.Min(),
+                BucketMaxFps = stableBuckets.Max(),
+                StableBucketCounts = stableBuckets
+            }
+        };
+
+        var decision = new FpsDecisionPolicy().Decide(detection);
+
+        Assert.True(decision.ShouldUseDetectedRate);
+        Assert.Equal(20, decision.NominalConversionFps);
+        Assert.Equal("20", decision.FfmpegRateValue);
+        Assert.Equal("Medium", decision.Confidence);
+    }
+
+    [Fact]
+    public void Decide_WithDominant30FpsBucketsAndSparseOutliers_Selects30()
+    {
+        var stableBuckets = Enumerable.Repeat(30, 983)
+            .Concat(Enumerable.Repeat(31, 12))
+            .Concat(new[] { 19, 22, 25, 26, 27, 27, 27, 27, 27, 28, 28, 29 })
+            .ToArray();
+        var detection = new SpotterFpsDetectionResult
+        {
+            Succeeded = true,
+            DetectionSource = "DatFrameRecordsDefaultTimebase",
+            Confidence = "Medium",
+            TechnicalDetails = new SpotterFpsTechnicalDetails
+            {
+                FrameCount = 30190,
+                BucketCount = 1008,
+                AverageFps = 29.965,
+                BucketMedianFps = 30,
+                BucketModeFps = 30,
+                BucketMinFps = stableBuckets.Min(),
+                BucketMaxFps = stableBuckets.Max(),
+                StableBucketCounts = stableBuckets
+            }
+        };
+
+        var decision = new FpsDecisionPolicy().Decide(detection);
+
+        Assert.True(decision.ShouldUseDetectedRate);
+        Assert.Equal(30, decision.NominalConversionFps);
+        Assert.Equal("30", decision.FfmpegRateValue);
+        Assert.Equal("Medium", decision.Confidence);
+    }
+
     private sealed class TempDirectory : IDisposable
     {
         public TempDirectory()

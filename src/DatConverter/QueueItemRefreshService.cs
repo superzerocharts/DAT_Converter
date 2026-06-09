@@ -18,12 +18,16 @@ public static class QueueItemRefreshService
             var itemOutputFormat = item.HasCustomFormat ? item.OutputFormat : settings.OutputFormat;
             var itemConversionMode = item.HasCustomMode ? item.ConversionMode : settings.ConversionMode;
             var itemFpsSettings = item.HasCustomFpsSetting ? item.FpsSettings : settings.FpsSettings;
+            var itemBurnTimestamp = item.HasCustomBurnTimestamp
+                ? item.BurnTimestamp
+                : settings.BurnTimestamp && BurnTimestampMetadataBuilder.IsSupportedMode(itemConversionMode);
             var itemSettings = settings with
             {
                 OutputFormat = itemOutputFormat,
                 ConversionMode = itemConversionMode,
                 Fps = itemFpsSettings.ToManualFpsOption(),
-                FpsSettings = itemFpsSettings
+                FpsSettings = itemFpsSettings,
+                BurnTimestamp = itemBurnTimestamp
             };
 
             var outputFolderPath = resolveOutputFolder(item, itemSettings);
@@ -86,6 +90,12 @@ public static class QueueItemRefreshService
                 continue;
             }
 
+            if (QueueItemStatusService.ApplyCombinedStoryboardReadiness(item))
+            {
+                refreshed++;
+                continue;
+            }
+
             if (!wasProbeValidForSettings)
             {
                 item.PreProbeResult = null;
@@ -135,6 +145,7 @@ public static class QueueItemRefreshService
             : null;
         item.OutputFormat = settings.OutputFormat;
         item.ConversionMode = settings.ConversionMode;
+        item.BurnTimestamp = settings.BurnTimestamp && BurnTimestampMetadataBuilder.IsSupportedMode(settings.ConversionMode);
         item.ApplyFpsResolution(settings.FpsSettings, fpsResolution);
         item.HasExistingDirectOutput = hasExistingDirectOutput;
     }

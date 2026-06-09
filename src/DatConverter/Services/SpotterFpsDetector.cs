@@ -76,11 +76,11 @@ public sealed class SpotterFpsDetector
 
             if (string.IsNullOrWhiteSpace(sefPath))
             {
-                warnings.Add("No .sef/.sef2 sidecar was supplied; using default Spotter timestamp timebase.");
+                warnings.Add("No export metadata file was supplied; using default Spotter timestamp timebase.");
             }
             else
             {
-                warnings.Add(sidecar.Warning ?? "The .sef/.sef2 sidecar was invalid; using default Spotter timestamp timebase.");
+                warnings.Add(sidecar.Warning ?? "The export metadata file was invalid; using default Spotter timestamp timebase.");
             }
         }
 
@@ -190,7 +190,7 @@ public sealed class SpotterFpsDetector
 
         if (!File.Exists(sefPath))
         {
-            return new SidecarDurationResult(null, $"The .sef/.sef2 sidecar was not found: {sefPath}");
+            return new SidecarDurationResult(null, $"The export metadata file was not found: {sefPath}");
         }
 
         try
@@ -202,17 +202,17 @@ public sealed class SpotterFpsDetector
             if (!DateTime.TryParse(startText, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var start) ||
                 !DateTime.TryParse(endText, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out var end))
             {
-                return new SidecarDurationResult(null, "The .sef/.sef2 sidecar did not contain valid start/end timestamps.");
+                return new SidecarDurationResult(null, "The export metadata file did not contain valid start/end timestamps.");
             }
 
             var duration = end - start;
             return duration > TimeSpan.Zero
                 ? new SidecarDurationResult(duration.TotalSeconds, null)
-                : new SidecarDurationResult(null, "The .sef/.sef2 sidecar duration was not positive.");
+                : new SidecarDurationResult(null, "The export metadata file duration was not positive.");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
         {
-            return new SidecarDurationResult(null, $"The .sef/.sef2 sidecar could not be read: {ex.Message}");
+            return new SidecarDurationResult(null, $"The export metadata file could not be read: {ex.Message}");
         }
     }
 

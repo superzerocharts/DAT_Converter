@@ -17,7 +17,7 @@ public sealed class SpotterMultiFileExportContext
         var lines = new List<string>
         {
             DisplayText,
-            $"Sidecar: {SidecarPath}",
+            $"Metadata file: {SidecarPath}",
             $"Segments: {string.Join(", ", SegmentFileNames)}"
         };
 

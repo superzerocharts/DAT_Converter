@@ -43,7 +43,7 @@ public sealed class SpotterFpsDetectorTests
         Assert.Equal("Medium", result.Confidence);
         Assert.Equal(SpotterFpsDetector.DefaultTimebaseUnitsPerSecond, result.TechnicalDetails.TimebaseUnitsPerSecond);
         Assert.InRange(result.TechnicalDetails.AverageFps!.Value, 29.89, 29.91);
-        Assert.Contains(result.TechnicalDetails.Warnings, warning => warning.Contains("No .sef/.sef2", StringComparison.Ordinal));
+        Assert.Contains(result.TechnicalDetails.Warnings, warning => warning.Contains("No export metadata file", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -60,7 +60,7 @@ public sealed class SpotterFpsDetectorTests
         Assert.True(result.Succeeded, result.FailureReason);
         Assert.Equal("DatFrameRecordsDefaultTimebase", result.DetectionSource);
         Assert.Equal("Medium", result.Confidence);
-        Assert.Contains(result.TechnicalDetails.Warnings, warning => warning.Contains("sidecar", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.TechnicalDetails.Warnings, warning => warning.Contains("metadata file", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

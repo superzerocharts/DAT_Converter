@@ -45,8 +45,23 @@ public static class QueueItemContainerMetadataBuilder
     {
         var parts = new List<string>
         {
-            item.IsSplitRecording ? "Source type: Split recording" : "Source type: Single DAT"
+            item.IsCombinedStoryboard ? "Source type: Storyboard" : item.IsStoryboardClip ? "Source type: Storyboard clip" : item.IsSplitRecording ? "Source type: Split recording" : "Source type: Single DAT"
         };
+
+        if (item.IsCombinedStoryboard && item.StoryboardPlan is not null)
+        {
+            parts.Add($"Storyboard clips: {item.StoryboardPlan.ClipCount}");
+            parts.Add("Storyboard clips will be combined in storyboard order");
+        }
+
+        if (item.StoryboardClip is not null)
+        {
+            parts.Add($"Storyboard clip: {item.StoryboardClip.ClipNumber} of {item.StoryboardPlan?.ClipCount ?? 0}");
+            if (!string.IsNullOrWhiteSpace(item.StoryboardClip.CameraDisplayName))
+            {
+                parts.Add($"Camera: {item.StoryboardClip.CameraDisplayName}");
+            }
+        }
 
         if (timeline.RecordingStart.HasValue)
         {

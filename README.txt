@@ -11,7 +11,7 @@ How to use:
 6. Choose the Source FPS option that matches the recording. Use Auto Detect when available.
 7. Choose Same folder as source file, or choose an output folder.
 8. Click Start Queue.
-9. Use Show Details only if you need technical conversion information.
+9. Use Show Log only if you need technical conversion information.
 
 Queue behavior:
 - The queue processes one file at a time.

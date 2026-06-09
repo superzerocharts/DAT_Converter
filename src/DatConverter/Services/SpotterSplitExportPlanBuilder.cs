@@ -41,7 +41,7 @@ public sealed class SpotterSplitExportPlanBuilder
         {
             if (sidecar.FileNames.Count == 1)
             {
-                evidence.Add("Sidecar references one .dat file; no split export plan was built.");
+                evidence.Add("Metadata file references one .dat file; no split export plan was built.");
             }
 
             return new SpotterSplitExportPlan
@@ -56,15 +56,15 @@ public sealed class SpotterSplitExportPlanBuilder
             };
         }
 
-        evidence.Add($"Sidecar lists {sidecar.FileNames.Count} .dat segment files.");
+        evidence.Add($"Metadata file lists {sidecar.FileNames.Count} .dat segment files.");
         if (!string.IsNullOrWhiteSpace(sidecar.Path))
         {
-            evidence.Add($"Sidecar: {sidecar.Path}");
+            evidence.Add($"Metadata file: {sidecar.Path}");
         }
 
         if (!string.IsNullOrWhiteSpace(sidecar.CameraDisplayName))
         {
-            evidence.Add($"Sidecar camera display name: {sidecar.CameraDisplayName}");
+            evidence.Add($"Metadata file camera display name: {sidecar.CameraDisplayName}");
         }
 
         var selectedSegmentNumber = ResolveSelectedSegmentNumber(selectedSourcePath, sidecar.FileNames);
@@ -84,7 +84,7 @@ public sealed class SpotterSplitExportPlanBuilder
 
         if (index.Records.Count > 0 && index.Records.Count != sidecar.FileNames.Count)
         {
-            warnings.Add("Sidecar segment count and index segment count do not match.");
+            warnings.Add("Metadata file segment count and index segment count do not match.");
         }
 
         if (index.Records.Count > 0 && !HasSequentialSegmentNumbers(index.Records))
@@ -168,7 +168,7 @@ public sealed class SpotterSplitExportPlanBuilder
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            warnings.Add($"Could not scan sidecar files: {ex.Message}");
+            warnings.Add($"Could not scan metadata files: {ex.Message}");
             return new SidecarSegmentList(null, Array.Empty<string>(), null);
         }
 
@@ -204,7 +204,7 @@ public sealed class SpotterSplitExportPlanBuilder
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
         {
-            warnings.Add($"Sidecar could not be read: {sidecarPath}; Error: {ex.Message}");
+            warnings.Add($"Metadata file could not be read: {sidecarPath}; Error: {ex.Message}");
             return new SidecarSegmentList(sidecarPath, Array.Empty<string>(), null);
         }
     }

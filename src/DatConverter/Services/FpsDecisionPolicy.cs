@@ -88,7 +88,7 @@ public sealed class FpsDecisionPolicy
 
         if (IsNtscEvidence(bucketEvidence.Value, averageFps, detectionSource))
         {
-            reason = "Sidecar-calibrated bucket and average evidence support NTSC 29.97 fps.";
+            reason = "Metadata-file calibrated bucket and average evidence support NTSC 29.97 fps.";
             return SupportedRates.First(static rate => Math.Abs(rate.Fps - 29.97) < 0.001);
         }
 
@@ -140,7 +140,7 @@ public sealed class FpsDecisionPolicy
         if (details.StableBucketCounts.Count > 0 && details.BucketMinFps.HasValue && details.BucketMaxFps.HasValue)
         {
             var spread = details.BucketMaxFps.Value - details.BucketMinFps.Value;
-            if (spread > 6)
+            if (spread > 6 && !HasDominantBucketEvidence(details.StableBucketCounts, selected.Value.Fps))
             {
                 warnings.Add("Stable per-second bucket counts are highly variable.");
                 return "Low";
@@ -172,6 +172,18 @@ public sealed class FpsDecisionPolicy
         }
 
         return best;
+    }
+
+    private static bool HasDominantBucketEvidence(IReadOnlyList<int> bucketCounts, double selectedFps)
+    {
+        if (bucketCounts.Count == 0)
+        {
+            return false;
+        }
+
+        var nominal = (int)Math.Round(selectedFps);
+        var matchingBuckets = bucketCounts.Count(count => Math.Abs(count - nominal) <= 1);
+        return matchingBuckets / (double)bucketCounts.Count >= 0.85;
     }
 
     private static bool IsNtscEvidence(double bucketEvidence, double? averageFps, string detectionSource)

@@ -20,5 +20,6 @@ public enum FolderImportReviewChoice
 {
     Cancel,
     UseRecommendedImport,
-    ImportEveryDatSeparately
+    ImportEveryDatSeparately,
+    CreateOneStoryboardVideo
 }

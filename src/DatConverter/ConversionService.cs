@@ -1,9 +1,14 @@
 using System.Diagnostics;
+using System.Globalization;
+using System.Text;
+using System.Text.Json;
 
 namespace DatConverter;
 
 public sealed class ConversionService
 {
+    private static readonly Encoding FfmpegConcatListEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
     private static readonly TimeSpan ConversionTimeout = TimeSpan.FromHours(12);
     public const string NvencUnavailableMessage = "Full NVENC requires a supported NVIDIA GPU and FFmpeg NVENC support. Try Full mode instead.";
 
@@ -148,6 +153,314 @@ public sealed class ConversionService
             cancellationToken,
             ConversionInputPathMode.StandardWholeDatRawH264);
         return AppendBurnTimestampFontWarning(result, burnTimestamp);
+    }
+
+    public async Task<ConversionResult> EncodeCombinedStoryboardAsync(
+        SpotterStoryboardPlan plan,
+        string outputPath,
+        OutputFormat outputFormat,
+        FpsOption fps,
+        TimeSpan? duration,
+        TrimRange? trimRange,
+        IProgress<ConversionProgress>? progress,
+        CancellationToken cancellationToken,
+        ContainerMetadata? metadata = null)
+    {
+        var inputPath = string.IsNullOrWhiteSpace(plan.SidecarPath) ? plan.ExportFolder : plan.SidecarPath;
+        if (!HasResolvedFps(fps))
+        {
+            return BuildUnresolvedFpsResult(inputPath, outputPath, outputFormat, fps, ConversionModes.Encode, duration);
+        }
+
+        if (!plan.IsStrongConfidence)
+        {
+            return new ConversionResult(
+                false,
+                "Storyboard export could not be verified.",
+                ffmpegTools.FfmpegPath,
+                Array.Empty<string>(),
+                inputPath,
+                outputPath,
+                fps,
+                null,
+                "",
+                "Storyboard plan was not strong enough at conversion time.",
+                ConversionMode: ConversionModes.Encode,
+                OutputFormat: outputFormat.DisplayName(),
+                Duration: duration,
+                UsedDeterminateProgress: duration.HasValue,
+                InputPathMode: ConversionInputPathMode.StoryboardCombinedCleanH264);
+        }
+
+        var guardResult = BuildOutputGuardResult(inputPath, outputPath, outputFormat, fps, Array.Empty<string>(), ConversionModes.Encode, duration);
+        if (guardResult is not null)
+        {
+            return guardResult;
+        }
+
+        var outputDirectory = Path.GetDirectoryName(outputPath);
+        var tempRoot = Path.Combine(
+            string.IsNullOrWhiteSpace(outputDirectory) ? Path.GetTempPath() : outputDirectory,
+            $"{Path.GetFileNameWithoutExtension(outputPath)}.{Guid.NewGuid():N}.storyboard-combine");
+        var technicalDetails = new List<string>
+        {
+            "Combined storyboard output prototype.",
+            "Source-time gaps and overlaps are not preserved; clips are concatenated in StoryboardData order."
+        };
+        IReadOnlyList<string> finalArguments = Array.Empty<string>();
+        ProcessRunResult? finalProcessResult = null;
+        var stopwatch = Stopwatch.StartNew();
+        var deleteTempRoot = false;
+        var tempPreservationLogged = false;
+
+        void LogTempPreservation()
+        {
+            if (tempPreservationLogged)
+            {
+                return;
+            }
+
+            technicalDetails.Add($"Storyboard temp files preserved for troubleshooting: {tempRoot}");
+            tempPreservationLogged = true;
+        }
+
+        ConversionResult BuildFailure(string userMessage)
+        {
+            LogTempPreservation();
+            return BuildStoryboardFailureResult(inputPath, outputPath, outputFormat, fps, duration, userMessage, technicalDetails, stopwatch.Elapsed);
+        }
+
+        try
+        {
+            Directory.CreateDirectory(tempRoot);
+            progress?.Report(CreateStoryboardPhaseProgress("Preparing storyboard clips...", 0, 1));
+
+            var planningStopwatch = Stopwatch.StartNew();
+            var segmentPlan = StoryboardTrimSegmentPlanner.Build(plan, trimRange);
+            planningStopwatch.Stop();
+            if (!StoryboardTimelineDiagnosticBuilder.PlannerUsesTrimPreviewTimelineBasis(segmentPlan))
+            {
+                technicalDetails.Add("Timeline mismatch suspected: trim preview and merge planner do not agree.");
+                technicalDetails.Add($"Trim preview timeline basis: {StoryboardTrimSegmentPlanner.TimelineMode}");
+                technicalDetails.Add($"Merge planner timeline basis: {segmentPlan.TimelineMode}");
+                return BuildFailure("Storyboard merge was blocked because trim timeline mapping could not be verified.");
+            }
+
+            technicalDetails.Add($"Storyboard trim planning elapsed: {planningStopwatch.Elapsed}.");
+            technicalDetails.Add("Storyboard ranged extraction note: DAT byte/frame range extraction is not keyframe-safe yet, so only intersecting source DAT files are full-extracted and then trimmed during normalization.");
+            if (segmentPlan.Segments.Count == 0)
+            {
+                return BuildFailure("Storyboard trim did not intersect any clips.");
+            }
+
+            var totalStoryboardPhases = Math.Max(1, (segmentPlan.Segments.Count * 2) + 2);
+            var completedStoryboardPhases = 0;
+            var h264Paths = new List<string>();
+            var intermediatePaths = segmentPlan.Segments
+                .Select(segment => Path.Combine(tempRoot, $"segment-{segment.OutputSegmentNumber:000}-clip-{segment.ClipNumber:000}.mp4"))
+                .ToList();
+            technicalDetails.Add(StoryboardTimelineDiagnosticBuilder.Build(plan, trimRange, segmentPlan, intermediatePaths).Trim());
+            for (var index = 0; index < segmentPlan.Segments.Count; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var segment = segmentPlan.Segments[index];
+                progress?.Report(CreateStoryboardPhaseProgress($"Extracting storyboard segment {index + 1} of {segmentPlan.Segments.Count}...", completedStoryboardPhases, totalStoryboardPhases));
+                var phaseStopwatch = Stopwatch.StartNew();
+                var h264Path = Path.Combine(tempRoot, $"segment-{segment.OutputSegmentNumber:000}-clip-{segment.ClipNumber:000}.h264");
+                h264Paths.Add(h264Path);
+                var extractionResult = await Task.Run(
+                    () => extractCleanH264(segment.SourceDatPath, h264Path, cancellationToken),
+                    cancellationToken);
+                phaseStopwatch.Stop();
+                completedStoryboardPhases++;
+                technicalDetails.Add($"Segment {segment.OutputSegmentNumber} extraction: clip {segment.ClipNumber}; source={Path.GetFileName(segment.SourceDatPath)}; confident={extractionResult.LookedConfident}; bytes={extractionResult.ExtractedPayloadByteCount}; elapsed={phaseStopwatch.Elapsed}.");
+                technicalDetails.Add(extractionResult.BuildTechnicalReport().Trim());
+                if (!extractionResult.Succeeded || !extractionResult.LookedConfident || string.IsNullOrWhiteSpace(extractionResult.OutputPath))
+                {
+                    return BuildFailure($"Storyboard segment {segment.OutputSegmentNumber} could not be extracted.");
+                }
+            }
+
+            var sourceInputFpsOptions = segmentPlan.Segments
+                .Select(segment => ResolveStoryboardSegmentSourceFps(segment, fps, technicalDetails))
+                .ToList();
+            var canvas = await ProbeH264DimensionsAsync(h264Paths[0], sourceInputFpsOptions[0], cancellationToken);
+            technicalDetails.Add($"Storyboard normalization canvas: {canvas.Width}x{canvas.Height}. Resolution policy: scale/pad every clip to the first detected clip resolution.");
+
+            for (var index = 0; index < segmentPlan.Segments.Count; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var segment = segmentPlan.Segments[index];
+                var sourceInputFps = sourceInputFpsOptions[index];
+                progress?.Report(CreateStoryboardPhaseProgress($"Normalizing storyboard segment {index + 1} of {segmentPlan.Segments.Count}...", completedStoryboardPhases, totalStoryboardPhases));
+                var phaseStopwatch = Stopwatch.StartNew();
+                var intermediatePath = intermediatePaths[index];
+                var intermediateArguments = FfmpegCommandBuilder.BuildStoryboardIntermediateEncodeArguments(
+                    h264Paths[index],
+                    intermediatePath,
+                    sourceInputFps,
+                    fps,
+                    canvas.Width,
+                    canvas.Height,
+                    segment.LocalStartOffset,
+                    segment.LocalDuration);
+                var intermediateResult = await runProcessAsync(
+                    ffmpegTools.FfmpegPath,
+                    intermediateArguments,
+                    ConversionTimeout,
+                    cancellationToken,
+                    null,
+                    null);
+                phaseStopwatch.Stop();
+                completedStoryboardPhases++;
+                var normalizedBytes = TryGetFileLength(intermediatePath);
+                technicalDetails.Add($"Segment {segment.OutputSegmentNumber} normalize: clip {segment.ClipNumber}; source_input_fps={sourceInputFps.Label} ({sourceInputFps.FfmpegValue}); final_output_fps={fps.Label} ({fps.FfmpegValue}); local_start={FormatDurationForLog(segment.LocalStartOffset)}; duration={FormatDurationForLog(segment.LocalDuration)}; output_bytes={normalizedBytes}; exit code={FormatExitCode(intermediateResult.ExitCode)}; canceled={intermediateResult.WasCanceled}; timed_out={intermediateResult.TimedOut}; elapsed={phaseStopwatch.Elapsed}.");
+                technicalDetails.Add($"Segment {segment.OutputSegmentNumber} normalize command: {ffmpegTools.FfmpegPath} {string.Join(" ", intermediateArguments.Select(QuoteArgumentForLog))}");
+                technicalDetails.Add($"Segment {segment.OutputSegmentNumber} normalize stdout: {FormatProcessTextForLog(intermediateResult.StandardOutput)}");
+                technicalDetails.Add($"Segment {segment.OutputSegmentNumber} normalize stderr: {FormatProcessTextForLog(intermediateResult.StandardError)}");
+                if (intermediateResult.ExitCode != 0 || TryGetFileLength(intermediatePath) <= 0)
+                {
+                    if (intermediateResult.WasCanceled)
+                    {
+                        throw new OperationCanceledException(cancellationToken);
+                    }
+
+                    technicalDetails.Add(intermediateResult.StandardError.Trim());
+                    return BuildFailure($"Storyboard segment {segment.OutputSegmentNumber} could not be normalized.");
+                }
+            }
+
+            var concatListPath = Path.Combine(tempRoot, "concat.txt");
+            progress?.Report(CreateStoryboardPhaseProgress("Preparing storyboard merge...", completedStoryboardPhases, totalStoryboardPhases));
+            var concatStopwatch = Stopwatch.StartNew();
+            WriteStoryboardConcatList(concatListPath, intermediatePaths);
+            var preflight = ValidateStoryboardConcatList(concatListPath, intermediatePaths);
+            concatStopwatch.Stop();
+            completedStoryboardPhases++;
+            technicalDetails.Add($"Storyboard concat list preflight: valid={preflight.IsValid}; elapsed={concatStopwatch.Elapsed}; path={concatListPath}; message={preflight.Message}");
+            if (!preflight.IsValid)
+            {
+                return BuildFailure($"Storyboard merge preflight failed. {preflight.Message}");
+            }
+
+            var segmentValidationStopwatch = Stopwatch.StartNew();
+            var segmentValidation = await ValidateNormalizedStoryboardSegmentsAsync(intermediatePaths, segmentPlan.Segments, cancellationToken);
+            segmentValidationStopwatch.Stop();
+            technicalDetails.Add(BuildNormalizedStoryboardSegmentValidationLog(segmentValidation, segmentValidationStopwatch.Elapsed));
+            if (!segmentValidation.IsValid)
+            {
+                technicalDetails.Add($"Normalized storyboard segment validation failed. {segmentValidation.Message}");
+                return BuildFailure("Storyboard merge failed while preparing video segments.");
+            }
+
+            finalArguments = FfmpegCommandBuilder.BuildStoryboardConcatEncodeArguments(intermediatePaths, outputPath, outputFormat, fps, metadata);
+            progress?.Report(CreateStoryboardPhaseProgress("Finalizing storyboard video...", completedStoryboardPhases, totalStoryboardPhases));
+            var finalStopwatch = Stopwatch.StartNew();
+            var progressParser = new ConversionProgressParser(duration);
+            finalProcessResult = await runProcessAsync(
+                ffmpegTools.FfmpegPath,
+                finalArguments,
+                ConversionTimeout,
+                cancellationToken,
+                line =>
+                {
+                    var progressUpdate = progressParser.ParseLine(line);
+                    if (progressUpdate is not null)
+                    {
+                        progress?.Report(progressUpdate);
+                    }
+                },
+                null);
+            finalStopwatch.Stop();
+            technicalDetails.Add($"Storyboard final concat elapsed: {finalStopwatch.Elapsed}.");
+
+            stopwatch.Stop();
+            var succeeded = finalProcessResult.ExitCode == 0 && TryGetFileLength(outputPath) > 0;
+            if (succeeded)
+            {
+                deleteTempRoot = true;
+                return new ConversionResult(
+                    true,
+                    "Full storyboard conversion completed.",
+                    ffmpegTools.FfmpegPath,
+                    finalArguments,
+                    inputPath,
+                    outputPath,
+                    fps,
+                    finalProcessResult.ExitCode,
+                    finalProcessResult.StandardOutput,
+                    PrependTechnicalNote(finalProcessResult.StandardError, string.Join(Environment.NewLine, technicalDetails)),
+                    ConversionMode: ConversionModes.Encode,
+                    OutputFormat: outputFormat.DisplayName(),
+                    TimedOut: finalProcessResult.TimedOut,
+                    Duration: duration,
+                    UsedDeterminateProgress: duration.HasValue,
+                    ProcessingTime: stopwatch.Elapsed,
+                    InputPathMode: ConversionInputPathMode.StoryboardCombinedCleanH264);
+            }
+
+            var partialOutputMessage = finalProcessResult.WasCanceled
+                ? PartialOutputService.TryDeleteCanceledOutput(outputPath, inputPath)
+                : PartialOutputService.TryMovePartialOutput(outputPath, inputPath);
+            LogTempPreservation();
+            return new ConversionResult(
+                false,
+                finalProcessResult.WasCanceled ? ConversionResult.CanceledMessage : "Full storyboard conversion failed.",
+                ffmpegTools.FfmpegPath,
+                finalArguments,
+                inputPath,
+                outputPath,
+                fps,
+                finalProcessResult.ExitCode,
+                finalProcessResult.StandardOutput,
+                PrependTechnicalNote(finalProcessResult.StandardError, string.Join(Environment.NewLine, technicalDetails)),
+                partialOutputMessage,
+                ConversionModes.Encode,
+                outputFormat.DisplayName(),
+                finalProcessResult.WasCanceled,
+                finalProcessResult.TimedOut,
+                duration,
+                duration.HasValue,
+                stopwatch.Elapsed,
+                ConversionInputPathMode.StoryboardCombinedCleanH264);
+        }
+        catch (OperationCanceledException)
+        {
+            stopwatch.Stop();
+            var cleanupMessage = PartialOutputService.TryDeleteCanceledOutput(outputPath, inputPath);
+            LogTempPreservation();
+            return new ConversionResult(
+                false,
+                ConversionResult.CanceledMessage,
+                ffmpegTools.FfmpegPath,
+                finalArguments,
+                inputPath,
+                outputPath,
+                fps,
+                finalProcessResult?.ExitCode,
+                finalProcessResult?.StandardOutput ?? "",
+                string.Join(Environment.NewLine, technicalDetails.Concat(new[] { "Combined storyboard conversion was canceled.", cleanupMessage })),
+                cleanupMessage,
+                ConversionModes.Encode,
+                outputFormat.DisplayName(),
+                WasCanceled: true,
+                Duration: duration,
+                UsedDeterminateProgress: duration.HasValue,
+                ProcessingTime: stopwatch.Elapsed,
+                InputPathMode: ConversionInputPathMode.StoryboardCombinedCleanH264);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            stopwatch.Stop();
+            return BuildFailure($"Full storyboard conversion failed. {ex.Message}");
+        }
+        finally
+        {
+            if (deleteTempRoot)
+            {
+                TryDeleteDirectory(tempRoot);
+            }
+        }
     }
 
     public async Task<ConversionResult> RemuxTrimmedAsync(
@@ -1077,6 +1390,19 @@ public sealed class ConversionService
         progress?.Report(new ConversionProgress(null, null, null, null, false, "Encoding selected trim..."));
     }
 
+    private static ConversionProgress CreateIndeterminateProgress(string summary)
+    {
+        return new ConversionProgress(null, null, null, null, false, summary, IsIndeterminate: true);
+    }
+
+    private static ConversionProgress CreateStoryboardPhaseProgress(string summary, int completedPhases, int totalPhases)
+    {
+        var percent = totalPhases <= 0
+            ? 0
+            : (int)Math.Clamp(Math.Round(completedPhases * 100d / totalPhases), 0, 99);
+        return new ConversionProgress(percent, null, null, null, false, summary);
+    }
+
     private static ConversionResult AppendBurnTimestampFontWarning(
         ConversionResult result,
         BurnTimestampOptions? burnTimestamp)
@@ -1331,6 +1657,425 @@ public sealed class ConversionService
         }
     }
 
+    private static void TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+        catch
+        {
+        }
+    }
+
+    private async Task<(int Width, int Height)> ProbeH264DimensionsAsync(string h264Path, FpsOption fps, CancellationToken cancellationToken)
+    {
+        var arguments = new[]
+        {
+            "-v", "error",
+            "-f", "h264",
+            "-framerate", fps.FfmpegValue,
+            "-i", h264Path,
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "json"
+        };
+
+        var result = await runProcessAsync(ffmpegTools.FfprobePath, arguments, TimeSpan.FromSeconds(8), cancellationToken, null, null);
+        if (result.ExitCode == 0)
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(result.StandardOutput);
+                var streams = document.RootElement.GetProperty("streams");
+                if (streams.GetArrayLength() > 0)
+                {
+                    var stream = streams[0];
+                    var width = stream.TryGetProperty("width", out var widthProperty) && widthProperty.TryGetInt32(out var parsedWidth)
+                        ? parsedWidth
+                        : 0;
+                    var height = stream.TryGetProperty("height", out var heightProperty) && heightProperty.TryGetInt32(out var parsedHeight)
+                        ? parsedHeight
+                        : 0;
+                    if (width > 0 && height > 0)
+                    {
+                        return (MakeEven(width), MakeEven(height));
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        return (1920, 1080);
+    }
+
+    private static FpsOption ResolveStoryboardSegmentSourceFps(StoryboardTrimSegment segment, FpsOption finalOutputFps, List<string> technicalDetails)
+    {
+        if (!string.IsNullOrWhiteSpace(segment.SourceFfmpegFpsValue))
+        {
+            var label = string.IsNullOrWhiteSpace(segment.SourceFpsLabel)
+                ? segment.SourceFfmpegFpsValue
+                : segment.SourceFpsLabel;
+            technicalDetails.Add($"Segment {segment.OutputSegmentNumber} source FPS: using detected storyboard clip FPS {label} ({segment.SourceFfmpegFpsValue}). Reason: {FormatLogValue(segment.SourceFpsDecisionReason)}");
+            return new FpsOption(label, segment.SourceFfmpegFpsValue);
+        }
+
+        try
+        {
+            var sidecarPath = SpotterSidecarLookup.FindSidecarForDat(segment.SourceDatPath);
+            var detection = new SpotterFpsDetector().Detect(segment.SourceDatPath, sidecarPath);
+            var decision = new FpsDecisionPolicy().Decide(detection);
+            if (decision.ShouldUseDetectedRate && !string.IsNullOrWhiteSpace(decision.FfmpegRateValue))
+            {
+                technicalDetails.Add($"Segment {segment.OutputSegmentNumber} source FPS: detected during storyboard merge as {decision.UserFacingLabel} ({decision.FfmpegRateValue}). Reason: {FormatLogValue(decision.DecisionReason)}");
+                return new FpsOption(decision.UserFacingLabel, decision.FfmpegRateValue);
+            }
+
+            technicalDetails.Add($"Segment {segment.OutputSegmentNumber} source FPS: detection was unavailable or uncertain; using final output FPS fallback {finalOutputFps.Label} ({finalOutputFps.FfmpegValue}). Reason: {FormatLogValue(decision.DecisionReason)}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            technicalDetails.Add($"Segment {segment.OutputSegmentNumber} source FPS: detection failed; using final output FPS fallback {finalOutputFps.Label} ({finalOutputFps.FfmpegValue}). Error: {ex.Message}");
+        }
+
+        return finalOutputFps;
+    }
+
+    private async Task<NormalizedStoryboardSegmentValidationResult> ValidateNormalizedStoryboardSegmentsAsync(
+        IReadOnlyList<string> segmentPaths,
+        IReadOnlyList<StoryboardTrimSegment> segments,
+        CancellationToken cancellationToken)
+    {
+        var results = new List<NormalizedStoryboardSegmentValidationItem>();
+        for (var index = 0; index < segmentPaths.Count; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var path = segmentPaths[index];
+            var segment = index < segments.Count ? segments[index] : null;
+            var bytes = TryGetFileLength(path);
+
+            if (!File.Exists(path))
+            {
+                results.Add(CreateSegmentValidationItem(index, segment, path, bytes, false, null, null, null, null, null, "failed: file does not exist"));
+                continue;
+            }
+
+            if (bytes <= 0)
+            {
+                results.Add(CreateSegmentValidationItem(index, segment, path, bytes, false, null, null, null, null, null, "failed: file is empty"));
+                continue;
+            }
+
+            var arguments = new[]
+            {
+                "-v", "error",
+                "-i", path,
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,duration",
+                "-show_entries", "format=duration",
+                "-of", "json"
+            };
+
+            var probeResult = await runProcessAsync(ffmpegTools.FfprobePath, arguments, TimeSpan.FromSeconds(8), cancellationToken, null, null);
+            var parsed = probeResult.ExitCode == 0
+                ? TryParseNormalizedStoryboardSegmentProbe(probeResult.StandardOutput, probeResult.StandardError)
+                : NormalizedStoryboardSegmentProbeResult.Failure($"ffprobe exit code {FormatExitCode(probeResult.ExitCode)}; stderr={FormatProcessTextForLog(probeResult.StandardError)}");
+
+            results.Add(CreateSegmentValidationItem(
+                index,
+                segment,
+                path,
+                bytes,
+                parsed.VideoStreamFound,
+                parsed.CodecName,
+                parsed.Width,
+                parsed.Height,
+                parsed.Duration,
+                parsed.FrameRate,
+                parsed.ValidationResult));
+        }
+
+        var firstFailure = results.FirstOrDefault(result => !result.IsValid);
+        return firstFailure is null
+            ? NormalizedStoryboardSegmentValidationResult.Valid(results)
+            : NormalizedStoryboardSegmentValidationResult.Invalid(results, $"Segment {firstFailure.SegmentIndex} did not contain a valid video stream.");
+    }
+
+    private static NormalizedStoryboardSegmentValidationItem CreateSegmentValidationItem(
+        int zeroBasedIndex,
+        StoryboardTrimSegment? segment,
+        string path,
+        long bytes,
+        bool videoStreamFound,
+        string? codecName,
+        int? width,
+        int? height,
+        string? duration,
+        string? frameRate,
+        string validationResult)
+    {
+        return new NormalizedStoryboardSegmentValidationItem(
+            zeroBasedIndex + 1,
+            segment?.ClipNumber,
+            segment?.CameraDisplayName ?? segment?.ClipName,
+            path,
+            bytes,
+            videoStreamFound,
+            codecName,
+            width,
+            height,
+            duration,
+            frameRate,
+            validationResult);
+    }
+
+    private static NormalizedStoryboardSegmentProbeResult TryParseNormalizedStoryboardSegmentProbe(string json, string standardError)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("streams", out var streams) ||
+                streams.ValueKind != JsonValueKind.Array ||
+                streams.GetArrayLength() == 0)
+            {
+                return NormalizedStoryboardSegmentProbeResult.Failure("failed: ffprobe did not report a video stream");
+            }
+
+            var stream = streams[0];
+            var codecName = GetJsonString(stream, "codec_name");
+            var width = GetJsonInt(stream, "width");
+            var height = GetJsonInt(stream, "height");
+            var streamDuration = GetJsonString(stream, "duration");
+            var formatDuration = root.TryGetProperty("format", out var format) ? GetJsonString(format, "duration") : null;
+            var avgFrameRate = GetJsonString(stream, "avg_frame_rate");
+            var rFrameRate = GetJsonString(stream, "r_frame_rate");
+
+            if (string.IsNullOrWhiteSpace(codecName))
+            {
+                return NormalizedStoryboardSegmentProbeResult.Failure("failed: ffprobe did not report a video codec");
+            }
+
+            if ((width.HasValue && width.Value <= 0) || (height.HasValue && height.Value <= 0))
+            {
+                return NormalizedStoryboardSegmentProbeResult.Failure("failed: ffprobe reported an invalid video resolution", codecName, width, height, FirstUsefulLogValue(formatDuration, streamDuration), FirstUsefulLogValue(avgFrameRate, rFrameRate));
+            }
+
+            return NormalizedStoryboardSegmentProbeResult.Success(
+                codecName,
+                width,
+                height,
+                FirstUsefulLogValue(formatDuration, streamDuration),
+                FirstUsefulLogValue(avgFrameRate, rFrameRate),
+                string.IsNullOrWhiteSpace(standardError) ? "passed" : $"passed; ffprobe stderr={standardError.Trim()}");
+        }
+        catch (JsonException ex)
+        {
+            return NormalizedStoryboardSegmentProbeResult.Failure($"failed: could not parse ffprobe JSON output: {ex.Message}");
+        }
+    }
+
+    private static string BuildNormalizedStoryboardSegmentValidationLog(NormalizedStoryboardSegmentValidationResult validation, TimeSpan elapsed)
+    {
+        var lines = new List<string>
+        {
+            "Normalized storyboard segment validation",
+            $"Elapsed: {elapsed}",
+            $"Overall result: {(validation.IsValid ? "passed" : "failed")}",
+            $"Message: {validation.Message}"
+        };
+
+        foreach (var segment in validation.Segments)
+        {
+            lines.Add(
+                $"- Segment {segment.SegmentIndex}: source_clip_index={FormatNullableInt(segment.SourceClipIndex)}; camera={FormatLogValue(segment.CameraDisplayName)}; path={segment.Path}; bytes={segment.Bytes}; video_stream_found={FormatYesNo(segment.VideoStreamFound)}; codec={FormatLogValue(segment.CodecName)}; resolution={FormatResolutionForLog(segment.Width, segment.Height)}; duration={FormatLogValue(segment.Duration)}; frame_rate={FormatLogValue(segment.FrameRate)}; validation_result={segment.ValidationResult}");
+        }
+
+        return string.Join(Environment.NewLine, lines);
+    }
+
+    private ConversionResult BuildStoryboardFailureResult(
+        string inputPath,
+        string outputPath,
+        OutputFormat outputFormat,
+        FpsOption fps,
+        TimeSpan? duration,
+        string userMessage,
+        IReadOnlyList<string> technicalDetails,
+        TimeSpan processingTime)
+    {
+        PartialOutputService.TryMovePartialOutput(outputPath, inputPath);
+        return new ConversionResult(
+            false,
+            userMessage,
+            ffmpegTools.FfmpegPath,
+            Array.Empty<string>(),
+            inputPath,
+            outputPath,
+            fps,
+            null,
+            "",
+            string.Join(Environment.NewLine, technicalDetails),
+            ConversionMode: ConversionModes.Encode,
+            OutputFormat: outputFormat.DisplayName(),
+            Duration: duration,
+            UsedDeterminateProgress: duration.HasValue,
+            ProcessingTime: processingTime,
+            InputPathMode: ConversionInputPathMode.StoryboardCombinedCleanH264);
+    }
+
+    private static int MakeEven(int value)
+    {
+        return value % 2 == 0 ? value : value - 1;
+    }
+
+    private static string EscapeConcatPath(string path)
+    {
+        return Path.GetFullPath(path).Replace("\\", "/", StringComparison.Ordinal).Replace("'", "'\\''", StringComparison.Ordinal);
+    }
+
+    public static void WriteStoryboardConcatList(string concatListPath, IEnumerable<string> clipPaths)
+    {
+        var lines = clipPaths.Select(path => $"file '{EscapeConcatPath(path)}'");
+        File.WriteAllLines(concatListPath, lines, FfmpegConcatListEncoding);
+    }
+
+    public static StoryboardConcatListValidationResult ValidateStoryboardConcatList(string concatListPath, IReadOnlyList<string> expectedClipPaths)
+    {
+        if (!File.Exists(concatListPath))
+        {
+            return StoryboardConcatListValidationResult.Invalid($"Concat list does not exist: {concatListPath}");
+        }
+
+        var bytes = File.ReadAllBytes(concatListPath);
+        if (bytes.Length == 0)
+        {
+            return StoryboardConcatListValidationResult.Invalid($"Concat list is empty: {concatListPath}");
+        }
+
+        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+        {
+            return StoryboardConcatListValidationResult.Invalid("Concat list starts with a UTF-8 BOM.");
+        }
+
+        var lines = File.ReadAllLines(concatListPath, FfmpegConcatListEncoding);
+        var nonEmptyLines = lines.Where(line => !string.IsNullOrWhiteSpace(line)).ToList();
+        var firstNonEmptyLine = nonEmptyLines.FirstOrDefault();
+        if (firstNonEmptyLine is null)
+        {
+            return StoryboardConcatListValidationResult.Invalid("Concat list does not contain any file entries.");
+        }
+
+        if (!firstNonEmptyLine.StartsWith("file ", StringComparison.Ordinal))
+        {
+            return StoryboardConcatListValidationResult.Invalid($"Concat list first entry is invalid: {firstNonEmptyLine}");
+        }
+
+        if (nonEmptyLines.Count != expectedClipPaths.Count)
+        {
+            return StoryboardConcatListValidationResult.Invalid($"Concat list entry count {nonEmptyLines.Count} does not match normalized clip count {expectedClipPaths.Count}.");
+        }
+
+        for (var index = 0; index < expectedClipPaths.Count; index++)
+        {
+            var clipPath = expectedClipPaths[index];
+            var expectedLine = $"file '{EscapeConcatPath(clipPath)}'";
+            if (!string.Equals(nonEmptyLines[index], expectedLine, StringComparison.Ordinal))
+            {
+                return StoryboardConcatListValidationResult.Invalid($"Concat list entry {index + 1} does not match expected normalized clip path.");
+            }
+
+            if (!File.Exists(clipPath))
+            {
+                return StoryboardConcatListValidationResult.Invalid($"Referenced normalized clip does not exist: {clipPath}");
+            }
+
+            if (TryGetFileLength(clipPath) <= 0)
+            {
+                return StoryboardConcatListValidationResult.Invalid($"Referenced normalized clip is empty: {clipPath}");
+            }
+        }
+
+        return StoryboardConcatListValidationResult.Valid($"Concat list contains {expectedClipPaths.Count} normalized clip entries.");
+    }
+
+    private static string FormatExitCode(int? exitCode)
+    {
+        return exitCode?.ToString(CultureInfo.InvariantCulture) ?? "none";
+    }
+
+    private static string FormatProcessTextForLog(string text)
+    {
+        return string.IsNullOrWhiteSpace(text) ? "(none)" : text.Trim();
+    }
+
+    private static string? GetJsonString(JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out var property) && property.ValueKind != JsonValueKind.Null
+            ? property.ToString()
+            : null;
+    }
+
+    private static int? GetJsonInt(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        return property.TryGetInt32(out var value) ? value : null;
+    }
+
+    private static string? FirstUsefulLogValue(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value) && value != "N/A")
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static string FormatNullableInt(int? value)
+    {
+        return value?.ToString(CultureInfo.InvariantCulture) ?? "unknown";
+    }
+
+    private static string FormatLogValue(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? "unknown" : value;
+    }
+
+    private static string FormatResolutionForLog(int? width, int? height)
+    {
+        return width.HasValue && height.HasValue ? $"{width.Value}x{height.Value}" : "unknown";
+    }
+
+    private static string FormatYesNo(bool value)
+    {
+        return value ? "yes" : "no";
+    }
+
+    private static string QuoteArgumentForLog(string value)
+    {
+        return value.Contains(' ') || value.Contains(';') || value.Contains('[') || value.Contains(']')
+            ? $"\"{value}\""
+            : value;
+    }
+
+    private static string FormatDurationForLog(TimeSpan value)
+    {
+        return value.ToString(@"hh\:mm\:ss\.fff", CultureInfo.InvariantCulture);
+    }
+
     private static string PrependTechnicalNote(string existingText, string note)
     {
         return string.IsNullOrWhiteSpace(existingText)
@@ -1370,4 +2115,82 @@ public sealed class ConversionService
         TimeSpan LocalStart,
         TimeSpan LocalEnd,
         TimeSpan Duration);
+
+    private sealed record NormalizedStoryboardSegmentProbeResult(
+        bool VideoStreamFound,
+        string? CodecName,
+        int? Width,
+        int? Height,
+        string? Duration,
+        string? FrameRate,
+        string ValidationResult)
+    {
+        public static NormalizedStoryboardSegmentProbeResult Success(
+            string codecName,
+            int? width,
+            int? height,
+            string? duration,
+            string? frameRate,
+            string validationResult)
+        {
+            return new NormalizedStoryboardSegmentProbeResult(true, codecName, width, height, duration, frameRate, validationResult);
+        }
+
+        public static NormalizedStoryboardSegmentProbeResult Failure(
+            string validationResult,
+            string? codecName = null,
+            int? width = null,
+            int? height = null,
+            string? duration = null,
+            string? frameRate = null)
+        {
+            return new NormalizedStoryboardSegmentProbeResult(false, codecName, width, height, duration, frameRate, validationResult);
+        }
+    }
+}
+
+public sealed record StoryboardConcatListValidationResult(bool IsValid, string Message)
+{
+    public static StoryboardConcatListValidationResult Valid(string message)
+    {
+        return new StoryboardConcatListValidationResult(true, message);
+    }
+
+    public static StoryboardConcatListValidationResult Invalid(string message)
+    {
+        return new StoryboardConcatListValidationResult(false, message);
+    }
+}
+
+public sealed record NormalizedStoryboardSegmentValidationResult(
+    bool IsValid,
+    string Message,
+    IReadOnlyList<NormalizedStoryboardSegmentValidationItem> Segments)
+{
+    public static NormalizedStoryboardSegmentValidationResult Valid(IReadOnlyList<NormalizedStoryboardSegmentValidationItem> segments)
+    {
+        return new NormalizedStoryboardSegmentValidationResult(true, $"Validated {segments.Count} normalized storyboard segment(s).", segments);
+    }
+
+    public static NormalizedStoryboardSegmentValidationResult Invalid(IReadOnlyList<NormalizedStoryboardSegmentValidationItem> segments, string message)
+    {
+        return new NormalizedStoryboardSegmentValidationResult(false, message, segments);
+    }
+}
+
+public sealed record NormalizedStoryboardSegmentValidationItem(
+    int SegmentIndex,
+    int? SourceClipIndex,
+    string? CameraDisplayName,
+    string Path,
+    long Bytes,
+    bool VideoStreamFound,
+    string? CodecName,
+    int? Width,
+    int? Height,
+    string? Duration,
+    string? FrameRate,
+    string ValidationResult)
+{
+    public bool IsValid => Bytes > 0 && VideoStreamFound;
 }

@@ -13,4 +13,5 @@ public sealed record ConversionProgress(
     string? DupFrames = null,
     string? DropFrames = null,
     string? OutTimeUs = null,
-    string? OutTimeMs = null);
+    string? OutTimeMs = null,
+    bool IsIndeterminate = false);
