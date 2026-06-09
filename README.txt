@@ -38,3 +38,5 @@ Files in this package:
 - tools\ffmpeg\LICENSE
 - tools\ffmpeg\README.txt
 - docs\THIRD_PARTY_NOTICES.md
+
+Created by Schizm Studios.

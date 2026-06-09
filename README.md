@@ -94,3 +94,5 @@ The portable output is created at:
 ```text
 publish\DAT_Converter_Portable\
 ```
+
+Created by Schizm Studios.

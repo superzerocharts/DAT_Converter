@@ -7,9 +7,10 @@ DAT Converter v0.1.1-rc1 is the first release-candidate package for final manual
 ### Package
 
 - Package: `DAT_Converter_Portable.zip`
-- SHA-256: `703F70F1B12B4DE158532574463C864086B511F49B30203A91D5F35C8384A576`
+- SHA-256: `C11E1910EA06258A40EC8F45E0BB35B47F5FDA12C241C94625C51F4989249BC6`
 - Portable app includes `DatConverter.exe`, bundled `ffmpeg.exe` / `ffprobe.exe`, FFmpeg license/readme files, README, and third-party notices.
 - The app uses bundled FFmpeg tools from `tools\ffmpeg` and does not depend on system `PATH`.
+- Created by Schizm Studios.
 
 ### QA Summary
 
