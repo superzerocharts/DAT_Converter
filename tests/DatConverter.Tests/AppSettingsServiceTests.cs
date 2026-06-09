@@ -15,8 +15,8 @@ public sealed class AppSettingsServiceTests
     {
         var settings = AppSettingsService.CreateDefault();
 
-        Assert.Equal(1080, settings.WindowWidth);
-        Assert.Equal(1020, settings.WindowHeight);
+        Assert.Equal(900, settings.WindowWidth);
+        Assert.Equal(680, settings.WindowHeight);
     }
 
     [Fact]
@@ -92,8 +92,8 @@ public sealed class AppSettingsServiceTests
     {
         var settings = AppSettingsService.Normalize(new AppSettings { WindowWidth = 100, WindowHeight = 100 });
 
-        Assert.Equal(960, settings.WindowWidth);
-        Assert.Equal(920, settings.WindowHeight);
+        Assert.Equal(880, settings.WindowWidth);
+        Assert.Equal(640, settings.WindowHeight);
     }
 
     [Fact]
@@ -103,8 +103,8 @@ public sealed class AppSettingsServiceTests
             new System.Drawing.Size(1800, 1000),
             new System.Drawing.Rectangle(0, 0, 1536, 824));
 
-        Assert.Equal(1080, size.Width);
-        Assert.Equal(920, size.Height);
+        Assert.Equal(900, size.Width);
+        Assert.Equal(680, size.Height);
     }
 
     [Fact]
@@ -115,8 +115,8 @@ public sealed class AppSettingsServiceTests
             new System.Drawing.Rectangle(0, 0, 1536, 824));
 
         Assert.True(size.Width <= 1536 - 16);
-        Assert.True(size.Height >= 920);
-        Assert.True(size.Height <= 1020);
+        Assert.True(size.Height >= 640);
+        Assert.True(size.Height <= 680);
     }
 
     [Fact]

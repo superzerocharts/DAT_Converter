@@ -3,27 +3,39 @@ namespace DatConverter;
 public sealed class MainForm : Form
 {
     private const int DetailsExpandedHeight = 220;
-    private const int DetailsFooterHeight = 62;
-    private const int DefaultWindowWidth = 1080;
-    private const int DefaultWindowHeight = 1020;
-    private const int MinimumWindowWidth = 960;
-    private const int MinimumWindowHeight = 920;
+    private const int DetailsFooterHeight = 48;
+    private const int PreferredExpandedWindowHeight = 780;
+    private const int DefaultWindowWidth = 900;
+    private const int DefaultWindowHeight = 680;
+    private const int MinimumWindowWidth = 880;
+    private const int MinimumWindowHeight = 640;
     private const int WindowScreenMargin = 8;
-    private const int ActionRowHeight = 66;
-    private const int FileSelectionRowHeight = 180;
-    private const int MinimumBatchOptionsRowHeight = 160;
-    private const int MinimumBatchOptionStackHeight = 78;
-    private const int MinimumQueueVisibleRows = 4;
-    private const int MinimumQueueGridHeight = 156;
+    private const int CompactButtonHeight = 34;
+    private const int StandardButtonHeight = 34;
+    private const int ButtonRowHeight = 48;
+    private const int SmallVerticalGap = 6;
+    private const int StandardGap = 8;
+    private const int OuterMargin = 12;
+    private const int TopActionButtonWidth = 130;
+    private const int QueueActionButtonWidth = 130;
+    private const int LogActionButtonWidth = 130;
+    private const int ActionRowHeight = ButtonRowHeight;
+    private const int FileSelectionBottomGap = 10;
+    private const int FileSelectionRowHeight = (ButtonRowHeight * 3) + FileSelectionBottomGap;
+    private const int FileSelectionControlRowHeight = ButtonRowHeight;
+    private const int MinimumBatchOptionsRowHeight = 112;
+    private const int MinimumBatchOptionStackHeight = 60;
+    private const int MinimumQueueVisibleRows = 2;
+    private const int MinimumQueueGridHeight = 96;
     private const int MinimumFlexibleContentWidth = 760;
-    private const int QueueStatusColumnWidth = 108;
-    private const int QueueFileColumnWidth = 202;
-    private const int QueueOutputColumnWidth = 278;
-    private const int QueueFormatColumnWidth = 70;
-    private const int QueueModeColumnWidth = 86;
-    private const int QueueFpsColumnWidth = 70;
-    private const int QueueResolutionColumnWidth = 92;
-    private const int QueueProgressColumnWidth = 109;
+    private const int QueueStatusColumnWidth = 80;
+    private const int QueueFileColumnWidth = 168;
+    private const int QueueOutputColumnWidth = 210;
+    private const int QueueFormatColumnWidth = 62;
+    private const int QueueModeColumnWidth = 70;
+    private const int QueueFpsColumnWidth = 58;
+    private const int QueueResolutionColumnWidth = 82;
+    private const int QueueProgressColumnWidth = 86;
 
     private const string MissingToolsStatusMessage = "The app needs its tools folder in the same folder as DatConverter.exe.";
     private const string MissingToolsExplanationMessage =
@@ -277,38 +289,39 @@ public sealed class MainForm : Form
         isInitializing = true;
         selectedFilePathTextBox = CreateReadOnlyTextBox("No .dat file selected");
         browseFileButton = CreateButton("Add Files...");
-        browseFileButton.Size = new Size(148, 48);
+        browseFileButton.Size = new Size(TopActionButtonWidth, StandardButtonHeight);
         addFolderButton = CreateButton("Add Folder...");
-        addFolderButton.Size = new Size(166, 48);
+        addFolderButton.Size = new Size(TopActionButtonWidth, StandardButtonHeight);
         queueGridView = CreateQueueGridView();
         startQueueButton = CreateButton("Start Queue");
-        startQueueButton.Size = new Size(160, 42);
+        startQueueButton.Size = new Size(QueueActionButtonWidth, StandardButtonHeight);
         stopAfterCurrentButton = CreateButton("Stop After Current");
-        stopAfterCurrentButton.Size = new Size(230, 42);
+        stopAfterCurrentButton.Size = new Size(QueueActionButtonWidth, StandardButtonHeight);
         cancelQueueButton = CreateButton("Cancel Queue");
-        cancelQueueButton.Size = new Size(180, 42);
+        cancelQueueButton.Size = new Size(QueueActionButtonWidth, StandardButtonHeight);
         removeSelectedQueueItemButton = CreateButton("Remove");
-        removeSelectedQueueItemButton.Size = new Size(216, 42);
+        removeSelectedQueueItemButton.Size = new Size(QueueActionButtonWidth, StandardButtonHeight);
         duplicateSelectedQueueItemButton = CreateButton("Duplicate");
-        duplicateSelectedQueueItemButton.Size = new Size(216, 42);
+        duplicateSelectedQueueItemButton.Size = new Size(QueueActionButtonWidth, StandardButtonHeight);
         clearCompletedQueueButton = CreateButton("Clear");
-        clearCompletedQueueButton.Size = new Size(212, 42);
+        clearCompletedQueueButton.Size = new Size(QueueActionButtonWidth, StandardButtonHeight);
         sameFolderRadioButton = new RadioButton
         {
             AutoSize = true,
             Text = "Same folder as source file",
             Checked = selectionState.OutputDestinationMode == OutputDestinationMode.SameFolderAsSource,
-            Margin = new Padding(0, 14, 18, 0)
+            Margin = new Padding(0, 8, 18, 0)
         };
         chooseFolderRadioButton = new RadioButton
         {
             AutoSize = true,
             Text = "Choose output folder",
             Checked = selectionState.OutputDestinationMode == OutputDestinationMode.ChooseOutputFolder,
-            Margin = new Padding(0, 14, 0, 0)
+            Margin = new Padding(0, 8, 0, 0)
         };
         outputFolderTextBox = CreateReadOnlyTextBox(string.IsNullOrWhiteSpace(selectionState.ChosenOutputFolderPath) ? "No output folder selected" : selectionState.ChosenOutputFolderPath);
         browseOutputFolderButton = CreateButton("Browse...");
+        browseOutputFolderButton.Size = new Size(TopActionButtonWidth, StandardButtonHeight);
         outputFormatComboBox = CreateComboBox(new[] { "MP4", "MKV" }, appSettings.OutputFormat);
         conversionModeComboBox = CreateComboBox(ConversionModes.DisplayOrder, FormatConversionModeForDisplay(appSettings.ConversionMode));
         ConfigureConversionModeComboBox(conversionModeComboBox);
@@ -322,7 +335,7 @@ public sealed class MainForm : Form
         };
         convertButton = CreateButton("Convert");
         cancelButton = CreateButton("Cancel Current");
-        cancelButton.Size = new Size(190, 42);
+        cancelButton.Size = new Size(QueueActionButtonWidth, StandardButtonHeight);
         conversionProgressBar = new ProgressBar
         {
             Dock = DockStyle.Fill,
@@ -342,7 +355,7 @@ public sealed class MainForm : Form
         normalStatusFont = currentStatusLabel.Font;
         boldStatusFont = new Font(normalStatusFont, FontStyle.Bold);
         showDetailsButton = CreateButton("Show Log");
-        showDetailsButton.Size = new Size(170, 42);
+        showDetailsButton.Size = new Size(QueueActionButtonWidth, StandardButtonHeight);
         statusLogTextBox = new RichTextBox
         {
             Dock = DockStyle.Fill,
@@ -358,13 +371,13 @@ public sealed class MainForm : Form
         };
         statusLogTextBox.HandleCreated += (_, _) => ApplyDetailsTextBoxTheme();
         openOutputFolderButton = CreateButton("Open Output");
-        openOutputFolderButton.Size = new Size(250, 42);
+        openOutputFolderButton.Size = new Size(QueueActionButtonWidth, StandardButtonHeight);
         openOutputFolderButton.TextAlign = ContentAlignment.MiddleCenter;
         openOutputFolderButton.ImageAlign = ContentAlignment.MiddleCenter;
         openOutputFolderButton.TextImageRelation = TextImageRelation.Overlay;
         openOutputFolderButton.Padding = Padding.Empty;
         wordWrapButton = CreateButton("Word Wrap: Off");
-        wordWrapButton.Size = new Size(190, 42);
+        wordWrapButton.Size = new Size(LogActionButtonWidth, StandardButtonHeight);
         copyLogButton = CreateButton("Copy Log");
         clearLogButton = CreateButton("Clear Log");
 
@@ -5076,7 +5089,9 @@ public sealed class MainForm : Form
         var workingArea = Screen.FromControl(this).WorkingArea;
         var frameHeight = Math.Max(0, Height - ClientSize.Height);
         var maxClientHeight = Math.Max(MinimumWindowHeight, workingArea.Height - (WindowScreenMargin * 2) - frameHeight);
-        var availableHeight = Math.Max(DetailsFooterHeight, maxClientHeight - ClientSize.Height);
+        var preferredExpandedClientHeight = Math.Max(ClientSize.Height + DetailsFooterHeight, PreferredExpandedWindowHeight - frameHeight);
+        var targetClientHeight = Math.Min(maxClientHeight, preferredExpandedClientHeight);
+        var availableHeight = Math.Max(DetailsFooterHeight, targetClientHeight - ClientSize.Height);
         return Math.Min(DetailsExpandedHeight, availableHeight);
     }
 
@@ -5929,7 +5944,7 @@ public sealed class MainForm : Form
         height += GetMinimumQueueGridHeight();
         height += ActionRowHeight;
         height += ActionRowHeight;
-        height += Math.Max(42, conversionProgressBar.PreferredSize.Height + conversionProgressBar.Margin.Vertical);
+        height += Math.Max(28, conversionProgressBar.PreferredSize.Height + conversionProgressBar.Margin.Vertical);
         height += GetStatusRowHeight();
 
         return new Size(width, height);
@@ -6015,6 +6030,37 @@ public sealed class MainForm : Form
                 issues.Add($"Layout issue: {DescribeControl(child)} bounds {child.Bounds} exceed parent {DescribeControl(parent)} client {parent.ClientRectangle}.");
             }
 
+            if (child is Button button)
+            {
+                if (button.Height < CompactButtonHeight)
+                {
+                    issues.Add($"Layout issue: {DescribeControl(button)} height {button.Height} is smaller than compact button height {CompactButtonHeight}.");
+                }
+
+                if (button.Height < StandardButtonHeight)
+                {
+                    issues.Add($"Layout issue: {DescribeControl(button)} height {button.Height} is smaller than standard button height {StandardButtonHeight}.");
+                }
+
+                var textHeight = TextRenderer.MeasureText(button.Text, button.Font).Height;
+                var clientHeight = button.ClientSize.Height - button.Padding.Vertical;
+                if (clientHeight < textHeight)
+                {
+                    issues.Add($"Layout issue: {DescribeControl(button)} text height {textHeight} exceeds button client height {clientHeight}.");
+                }
+
+                if (button.Parent is not null &&
+                    (button.Bottom > button.Parent.ClientSize.Height || button.Right > button.Parent.ClientSize.Width))
+                {
+                    issues.Add($"Layout issue: {DescribeControl(button)} bounds {button.Bounds} exceed parent {DescribeControl(button.Parent)} client size {button.Parent.ClientSize}.");
+                }
+
+                if (button.Parent is not null && button.Parent.ClientSize.Height < button.Height)
+                {
+                    issues.Add($"Layout issue: {DescribeControl(button)} height {button.Height} exceeds parent {DescribeControl(button.Parent)} client height {button.Parent.ClientSize.Height}.");
+                }
+            }
+
             if (child is ComboBox comboBox && child.Height < comboBox.MinimumSize.Height)
             {
                 issues.Add($"Layout issue: {DescribeControl(child)} height {child.Height} is smaller than minimum combo height {comboBox.MinimumSize.Height}.");
@@ -6041,17 +6087,17 @@ public sealed class MainForm : Form
         var root = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            Padding = new Padding(12),
+            Padding = new Padding(OuterMargin),
             ColumnCount = 1,
             RowCount = 9
         };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, FileSelectionRowHeight));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, ActionRowHeight));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, ActionRowHeight));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, GetStatusRowHeight()));
         detailsRowStyle = new RowStyle(SizeType.Absolute, 0);
         root.RowStyles.Add(detailsRowStyle);
@@ -6079,14 +6125,14 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 3,
             RowCount = 3,
-            Padding = new Padding(0)
+            Padding = new Padding(0, 0, 0, FileSelectionBottomGap)
         };
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 210));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340));
-        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
-        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
-        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, (TopActionButtonWidth * 2) + StandardGap));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, FileSelectionControlRowHeight));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, FileSelectionControlRowHeight));
+        panel.RowStyles.Add(new RowStyle(SizeType.Absolute, FileSelectionControlRowHeight));
 
         panel.Controls.Add(CreateLabel("DAT file:"), 0, 0);
         panel.Controls.Add(selectedFilePathTextBox, 1, 0);
@@ -6096,7 +6142,7 @@ public sealed class MainForm : Form
         panel.SetColumnSpan(panel.GetControlFromPosition(1, 1)!, 2);
         panel.Controls.Add(CreateLabel("Output folder:"), 0, 2);
         panel.Controls.Add(outputFolderTextBox, 1, 2);
-        panel.Controls.Add(browseOutputFolderButton, 2, 2);
+        panel.Controls.Add(BuildOutputBrowseButtonPanel(), 2, 2);
 
         return panel;
     }
@@ -6111,9 +6157,9 @@ public sealed class MainForm : Form
             Margin = new Padding(0)
         };
 
-        SetButtonWidth(browseFileButton, 148);
-        SetButtonWidth(addFolderButton, 166);
-        browseFileButton.Margin = new Padding(0, 4, 8, 4);
+        SetButtonWidth(browseFileButton, TopActionButtonWidth);
+        SetButtonWidth(addFolderButton, TopActionButtonWidth);
+        browseFileButton.Margin = new Padding(0, 4, StandardGap, 4);
         addFolderButton.Margin = new Padding(0, 4, 0, 4);
         panel.Controls.Add(browseFileButton);
         panel.Controls.Add(addFolderButton);
@@ -6135,6 +6181,25 @@ public sealed class MainForm : Form
         return panel;
     }
 
+    private Control BuildOutputBrowseButtonPanel()
+    {
+        var panel = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0),
+            Padding = Padding.Empty
+        };
+
+        SetButtonWidth(browseOutputFolderButton, TopActionButtonWidth);
+        browseOutputFolderButton.Dock = DockStyle.None;
+        browseOutputFolderButton.Anchor = AnchorStyles.Left | AnchorStyles.Top;
+        browseOutputFolderButton.Margin = Padding.Empty;
+        CenterButtonInHost(browseOutputFolderButton, panel, TopActionButtonWidth);
+        panel.Controls.Add(browseOutputFolderButton);
+        panel.Resize += (_, _) => CenterButtonInHost(browseOutputFolderButton, panel, TopActionButtonWidth);
+        return panel;
+    }
+
     private Control BuildOptionsPanel()
     {
         var groupBox = new GroupBox
@@ -6143,7 +6208,7 @@ public sealed class MainForm : Form
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             Dock = DockStyle.Fill,
             Text = "Batch Options",
-            Padding = new Padding(14, 18, 14, 12)
+            Padding = new Padding(10, 10, 10, 4)
         };
 
         var panel = new TableLayoutPanel
@@ -6153,7 +6218,7 @@ public sealed class MainForm : Form
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 1,
             RowCount = 2,
-            Padding = new Padding(6, 2, 0, 0)
+            Padding = new Padding(4, 0, 0, 0)
         };
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -6173,7 +6238,7 @@ public sealed class MainForm : Form
         dropdownPanel.Controls.Add(BuildOptionStack("Source FPS", frameRateComboBox, 190));
         batchBurnTimestampCheckBox.Dock = DockStyle.Top;
         batchBurnTimestampCheckBox.MinimumSize = new Size(260, 28);
-        batchBurnTimestampCheckBox.Margin = new Padding(0, 8, 0, 0);
+        batchBurnTimestampCheckBox.Margin = new Padding(0, 4, 0, 0);
 
         panel.Controls.Add(dropdownPanel, 0, 0);
         panel.Controls.Add(batchBurnTimestampCheckBox, 0, 1);
@@ -6229,7 +6294,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 5,
             RowCount = 1,
-            Padding = new Padding(0, 3, 0, 3)
+            Padding = new Padding(0)
         };
 
         for (var column = 0; column < 5; column++)
@@ -6253,7 +6318,7 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 5,
             RowCount = 1,
-            Padding = new Padding(0, 3, 0, 3)
+            Padding = new Padding(0)
         };
 
         for (var column = 0; column < 5; column++)
@@ -6272,10 +6337,23 @@ public sealed class MainForm : Form
 
     private static void AddActionButtonToGrid(TableLayoutPanel panel, Button button, int column)
     {
-        button.Dock = DockStyle.Fill;
-        button.Margin = new Padding(6, 2, 0, 2);
         EnsureButtonMinimumSize(button);
-        panel.Controls.Add(button, column, 0);
+
+        var host = new Panel
+        {
+            Dock = DockStyle.Fill,
+            Margin = new Padding(6, 0, 0, 0),
+            Padding = Padding.Empty
+        };
+
+        button.Dock = DockStyle.None;
+        button.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        button.Margin = Padding.Empty;
+        button.Width = host.ClientSize.Width;
+        CenterButtonInHost(button, host);
+        host.Controls.Add(button);
+        host.Resize += (_, _) => CenterButtonInHost(button, host);
+        panel.Controls.Add(host, column, 0);
     }
 
     private Control BuildDetailsPanel()
@@ -6305,13 +6383,13 @@ public sealed class MainForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 4,
             RowCount = 1,
-            Padding = new Padding(0, 4, 0, 4),
+            Padding = new Padding(0),
             BackColor = SystemColors.Control
         };
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 206));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, LogActionButtonWidth + 6));
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 148));
-        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 148));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, LogActionButtonWidth + 6));
+        panel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, LogActionButtonWidth + 6));
         panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         AddActionButtonToGrid(panel, wordWrapButton, 0);
@@ -6351,7 +6429,7 @@ public sealed class MainForm : Form
             Width = comboWidth,
             ColumnCount = 1,
             RowCount = 2,
-            Margin = new Padding(0, 0, 70, 0),
+            Margin = new Padding(0, 0, 28, 0),
             Padding = new Padding(0)
         };
         panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -6363,7 +6441,7 @@ public sealed class MainForm : Form
         label.AutoSize = true;
         label.Dock = DockStyle.Top;
         label.MinimumSize = new Size(comboWidth, labelHeight);
-        label.Margin = new Padding(0, 0, 0, 4);
+        label.Margin = new Padding(0, 0, 0, 2);
 
         ApplyPreferredComboBoxHeight(comboBox, comboWidth);
         comboBox.Dock = DockStyle.Top;
@@ -6420,7 +6498,7 @@ public sealed class MainForm : Form
         var button = new Button
         {
             AutoSize = false,
-            Size = new Size(112, 42),
+            Size = new Size(112, StandardButtonHeight),
             Margin = new Padding(6, 4, 0, 4),
             Text = text,
             TextAlign = ContentAlignment.MiddleCenter,
@@ -6439,12 +6517,21 @@ public sealed class MainForm : Form
 
     private static void EnsureButtonMinimumSize(Button button)
     {
-        var preferredHeight = Math.Max(42, button.GetPreferredSize(Size.Empty).Height + 4);
+        var preferredHeight = Math.Max(StandardButtonHeight, button.GetPreferredSize(Size.Empty).Height + 4);
         button.MinimumSize = new Size(0, preferredHeight);
-        if (button.Height < preferredHeight)
-        {
-            button.Height = preferredHeight;
-        }
+        button.Height = preferredHeight;
+    }
+
+    private static void CenterButtonInHost(Button button, Control host, int? maxWidth = null)
+    {
+        var hostWidth = Math.Max(0, host.ClientSize.Width);
+        var width = maxWidth.HasValue ? Math.Min(maxWidth.Value, hostWidth) : hostWidth;
+        var height = Math.Min(button.MinimumSize.Height, Math.Max(0, host.ClientSize.Height));
+        button.SetBounds(
+            0,
+            Math.Max(0, (host.ClientSize.Height - height) / 2),
+            width,
+            height);
     }
 
     private void RegisterQueueDeselectHandlers(Control control)

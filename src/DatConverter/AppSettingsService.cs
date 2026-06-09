@@ -102,14 +102,14 @@ public sealed class AppSettingsService
         }
         settings.Fps = IsAutoDetectFps(settings.Fps) ? "Auto-detect" : FpsOption.FromLabel(settings.Fps).Label;
 
-        if (settings.WindowWidth < 960)
+        if (settings.WindowWidth < 880)
         {
-            settings.WindowWidth = 960;
+            settings.WindowWidth = 880;
         }
 
-        if (settings.WindowHeight < 920)
+        if (settings.WindowHeight < 640)
         {
-            settings.WindowHeight = 920;
+            settings.WindowHeight = 640;
         }
 
         return settings;
